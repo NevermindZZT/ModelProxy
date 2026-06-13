@@ -1,0 +1,173 @@
+# ============================================================
+# ModelProxy 打包构建工作流
+# ============================================================
+# 触发方式:
+#   - 推送到 main 分支时: 构建并上传 artifact
+#   - 推送标签 (v*) 时: 构建并创建 GitHub Release
+# ============================================================
+
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  # 允许手动触发
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 构建 ModelProxy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建 Windows x64
+        run: npx pkg . --out-path dist --targets node18-win-x64 --compress GZip
+
+      - name: 构建 Linux x64
+        run: npx pkg . --out-path dist --targets node18-linux-x64 --compress GZip
+
+      - name: 构建 macOS x64
+        run: npx pkg . --out-path dist --targets node18-macos-x64 --compress GZip
+
+      - name: 列出构建产物
+        run: ls -lh dist/
+
+      - name: 上传构建产物 (Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          name: modelproxy-win-x64
+          path: dist/model-proxy-win-x64.exe
+          if-no-files-found: error
+
+      - name: 上传构建产物 (Linux)
+        uses: actions/upload-artifact@v4
+        with:
+          name: modelproxy-linux-x64
+          path: dist/model-proxy-linux-x64
+          if-no-files-found: error
+
+      - name: 上传构建产物 (macOS)
+        uses: actions/upload-artifact@v4
+        with:
+          name: modelproxy-macos-x64
+          path: dist/model-proxy-macos-x64
+          if-no-files-found: error
+
+      # 上传完整配置文件和启动脚本（供 Release 使用）
+      - name: 打包附加资源
+        run: |
+          mkdir -p dist/extra
+          cp config.yaml dist/extra/
+          cp start.bat dist/extra/ 2>/dev/null || true
+          cp start.ps1 dist/extra/ 2>/dev/null || true
+          cp README.md dist/extra/ 2>/dev/null || true
+          # 复制 Win 可执行文件到 extra（方便用户直接下载整个包）
+          cp dist/model-proxy-win-x64.exe dist/extra/modelproxy.exe 2>/dev/null || true
+
+      - name: 上传附加资源
+        uses: actions/upload-artifact@v4
+        with:
+          name: modelproxy-extra
+          path: dist/extra/*
+
+  # ============================================================
+  # Release 任务: 仅在有标签推送时执行
+  # ============================================================
+  release:
+    name: 创建 Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载所有构建产物
+        uses: actions/download-artifact@v4
+
+      - name: 准备 Release 文件
+        run: |
+          mkdir -p release-assets
+          # 各平台可执行文件
+          cp modelproxy-win-x64/model-proxy-win-x64.exe release-assets/modelproxy-windows-x64.exe
+          cp modelproxy-linux-x64/model-proxy-linux-x64  release-assets/modelproxy-linux-x64
+          cp modelproxy-macos-x64/model-proxy-macos-x64   release-assets/modelproxy-macos-x64
+          # 附加资源打包
+          cp -r modelproxy-extra/* release-assets/
+
+      - name: 创建 Release 压缩包 (Windows)
+        run: |
+          cd release-assets
+          zip -r ../modelproxy-windows-x64.zip modelproxy-windows-x64.exe config.yaml README.md start.bat start.ps1 2>/dev/null || \
+          zip -r ../modelproxy-windows-x64.zip modelproxy-windows-x64.exe config.yaml README.md
+
+      - name: 创建 Release 压缩包 (Linux)
+        run: |
+          cd release-assets
+          tar czf ../modelproxy-linux-x64.tar.gz modelproxy-linux-x64 config.yaml README.md
+
+      - name: 创建 Release 压缩包 (macOS)
+        run: |
+          cd release-assets
+          tar czf ../modelproxy-macos-x64.tar.gz modelproxy-macos-x64 config.yaml README.md
+
+      - name: 生成校验和
+        run: |
+          cd release-assets
+          sha256sum * > ../checksums.txt
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ModelProxy ${{ github.ref_name }}
+          body: |
+            ## ModelProxy ${{ github.ref_name }}
+
+            ### 📦 下载
+
+            | 平台 | 文件 |
+            |------|------|
+            | Windows x64 | `modelproxy-windows-x64.zip` |
+            | Linux x64 | `modelproxy-linux-x64.tar.gz` |
+            | macOS x64 | `modelproxy-macos-x64.tar.gz` |
+
+            ### 🚀 使用方式
+
+            1. 下载对应平台的可执行文件
+            2. 在同目录放置 `config.yaml`（已包含在压缩包中）
+            3. 双击运行（Windows: `modelproxy.exe`，Linux/Mac: `./modelproxy-linux-x64`）
+            4. 打开浏览器访问 http://127.0.0.1:8520/_modelproxy/admin
+
+            ### 🔧 配置
+
+            编辑 `config.yaml` 或通过管理面板在线修改。
+
+            > 首次运行会自动生成 CA 证书，请安装到系统信任存储。
+          draft: false
+          prerelease: false
+          files: |
+            modelproxy-windows-x64.zip
+            modelproxy-linux-x64.tar.gz
+            modelproxy-macos-x64.tar.gz
+            release-assets/config.yaml
+            release-assets/README.md
+            checksums.txt
