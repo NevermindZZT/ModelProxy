@@ -1,0 +1,59 @@
+# ============================================================
+# ModelProxy 配置文件
+# ============================================================
+# Android Studio GitHub Copilot 添加模型时支持以下供应商：
+#   - Azure, Anthropic, OpenAI, Gemini, Groq, OpenRouter
+# 本代理将拦截对这些供应商的请求，转发到您指定的目标模型供应商。
+# ============================================================
+
+# 代理服务器监听地址
+proxy:
+  host: "127.0.0.1"
+  port: 8520
+
+# 目标模型供应商配置
+# 当 Copilot 请求被拦截后，将转发到此处配置的供应商
+target:
+  # 供应商类型: openai-compatible (兼容 OpenAI API 格式的供应商，如 DeepSeek)
+  # 或 anthropic-compatible (兼容 Anthropic API 格式的供应商)
+  type: "openai-compatible"
+  
+  # API 基础地址
+  base_url: "https://api.deepseek.com"
+  
+  # 模型名称映射: 支持正则表达式
+  # 格式: "copilot中看到的模型名": "目标供应商的模型名"
+  model_mapping:
+    "gpt-4o": "deepseek-v4-flash"
+    "gpt-4o-mini": "deepseek-v4-flash"
+    "gpt-4-turbo": "deepseek-v4-flash"
+    "gpt-3.5-turbo": "deepseek-v4-flash"
+    "gpt-5.4": "deepseek-v4-flash"
+    "gpt-5.5": "deepseek-v4-pro"
+    "claude-3-opus-20240229": "deepseek-v4-flash"
+    "claude-3-sonnet-20240229": "deepseek-v4-flash"
+    "claude-3-haiku-20240307": "deepseek-v4-flash"
+    "claude-3-5-sonnet-20241022": "deepseek-v4-flash"
+    "claude-3-5-haiku-20241022": "deepseek-v4-flash"
+    "default": "deepseek-v4-flash"
+
+# 需要拦截的 API 域名列表
+# 这些域名的请求将被拦截并转发到目标供应商
+intercept_domains:
+  - "api.openai.com"
+  - "api.anthropic.com"
+  - "generativelanguage.googleapis.com"
+  - "api.groq.com"
+  - "api.openrouter.ai"
+
+# 智能拦截域名
+# 这些域名会进行 MITM 解密，但**仅拦截大模型推理请求**（如 chat/completions）
+# 其他请求（认证、模型列表、健康检查等）会透传到原始服务器
+# 注意: 不要将 api.individual.githubcopilot.com 加入此处！
+#   Copilot 后端使用证书锁定，MITM 会导致 "An error occurred" 错误
+smart_intercept_domains:
+  - "openrouter.ai"
+
+# 日志级别: debug, info, warn, error
+# 如果看不到日志，设为 debug 可以看到所有请求详情
+log_level: "debug"
