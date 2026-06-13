@@ -24,6 +24,25 @@ class OpenAIBackedAdapter {
     //   数字: 所有模型共用（如 1048576）
     //   对象: 按源模型名区分（如 { default: 1048576, "gpt-4o-mini": 65536 }）
     this.contextWindowConfig = config.target.context_window || null;
+    // 模型思考/推理配置（支持按模型配置或统一配置）
+    this.rawThinkingConfig = config.target.thinking || null;
+  }
+
+  /**
+   * 获取指定模型的 thinking 配置
+   * 支持两种格式：
+   *   1) 统一格式: { enabled: false, effort: "medium" } — 所有模型共用
+   *   2) 按模型格式: { default: { enabled: false }, "deepseek-v4-flash": { enabled: true } }
+   *   按模型格式时，key 为目标模型名（即 model_mapping 的值），而非 Copilot 端的源模型名
+   */
+  getThinkingConfig(modelId) {
+    if (!this.rawThinkingConfig) return null;
+    // 统一格式：顶层有 enabled 字段
+    if (this.rawThinkingConfig.enabled !== undefined) {
+      return this.rawThinkingConfig;
+    }
+    // 按模型格式：按模型名查找，找不到用 default
+    return this.rawThinkingConfig[modelId] || this.rawThinkingConfig.default || null;
   }
 
   /**
@@ -108,6 +127,7 @@ class OpenAIBackedAdapter {
 
   /**
    * 处理聊天补全请求
+   * 支持根据配置注入 thinking/reasoning 参数（如 reasoning_effort）
    */
   async handleChatCompletions(body, apiKey) {
     // 解析请求体
@@ -120,15 +140,41 @@ class OpenAIBackedAdapter {
 
     // 映射模型名称
     const originalModel = requestBody.model || '';
-    requestBody.model = this.mapModel(originalModel);
+    const targetModel = this.mapModel(originalModel);
+    requestBody.model = targetModel;
     
-    logger.info(`  模型映射: ${originalModel} → ${requestBody.model}`);
+    logger.info(`  模型映射: ${originalModel} → ${targetModel}`);
 
-    // 转发到目标 API，使用传入的 API Key
+    // 注入 thinking/reasoning 参数（按目标模型名配置，如果请求本身已携带则不覆盖）
+    const modelThinking = this.getThinkingConfig(targetModel);
+    const hasThinkingConfig = !!modelThinking;
+    logger.info(`  thinking 配置查找: targetModel=${targetModel}, 找到=${hasThinkingConfig}, enabled=${modelThinking?.enabled}`);
+    if (modelThinking && modelThinking.enabled) {
+      // DeepSeek V4 的 thinking 参数格式: thinking: { type: "enabled" }
+      if (requestBody.thinking === undefined) {
+        requestBody.thinking = { type: 'enabled' };
+        logger.info('  注入 thinking: { type: "enabled" }');
+      }
+
+      // reasoning_effort: DeepSeek 支持 "high" 和 "max"，低/中会自动映射到 high
+      if (modelThinking.effort && requestBody.reasoning_effort === undefined) {
+        const effort = modelThinking.effort;
+        // 将 low/medium 映射为 high（DeepSeek 的行为）
+        const mappedEffort = (effort === 'low' || effort === 'medium') ? 'high' : effort;
+        requestBody.reasoning_effort = mappedEffort;
+        logger.info(`  注入 thinking: reasoning_effort=${mappedEffort}（原始配置=${effort}）`);
+      }
+    }
+
+    // 转发到目标 API
+    const finalBody = JSON.stringify(requestBody);
+    // 记录发送给 DeepSeek 的完整请求（只保留关键字段，避免刷屏）
+    const streamMode = requestBody.stream ? 'stream=true' : 'stream=false';
+    logger.info(`  发送到 DeepSeek: model=${targetModel}, ${streamMode}, thinking=${JSON.stringify(requestBody.thinking)}, reasoning_effort=${requestBody.reasoning_effort || '未设置'}`);
     return this.forwardToTarget('POST', this.targetBaseUrl + '/v1/chat/completions', {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
-    }, JSON.stringify(requestBody), apiKey);
+    }, finalBody, apiKey);
   }
 
   /**
@@ -246,6 +292,13 @@ class OpenAIBackedAdapter {
           const responseBody = Buffer.concat(chunks).toString('utf-8');
           
           logger.debug(`  目标响应状态: ${res.statusCode}`);
+          // 检查 DeepSeek 响应中是否包含 reasoning_content
+          if (responseBody.includes('reasoning_content')) {
+            logger.info('  ✅ DeepSeek 响应中包含 reasoning_content（thinking 已生效）');
+          } else if (res.statusCode >= 400) {
+            // 如果是错误响应，打印前 500 字符帮助排查
+            logger.warn(`  ❌ DeepSeek 返回错误 (${res.statusCode}): ${responseBody.substring(0, 500)}`);
+          }
 
           // 过滤响应头，移除传输相关头
           const responseHeaders = {};

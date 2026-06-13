@@ -38,6 +38,29 @@ target:
     # "gpt-4o-mini": 65536
     # "claude-3-5-sonnet-20241022": 200000
 
+  # 模型思考/推理配置（可选）
+  # 适用于 DeepSeek V4、OpenAI o1/o3 等支持 thinking 的模型
+  # 如果不配置，代理不会注入任何 thinking 参数，保持原始请求不变
+  # 支持两种格式：
+  #   1) 统一格式：顶层有 enabled 字段，所有模型共用
+  #   2) 按模型格式（推荐）：按目标模型名（model_mapping 的值）独立配置
+  # 
+  # DeepSeek 的 thinking 参数是 { type: "enabled" }，会自动注入。
+  # reasoning_effort 可选值: "high" | "max"（"low"/"medium" 会被映射为 "high"）
+  thinking:
+    default:
+      enabled: false
+    "deepseek-v4-flash":
+      enabled: true
+      effort: "high"
+    "deepseek-v4-pro":
+      enabled: true
+      effort: "high"
+    # 示例：为特定模型开启 thinking
+    # "gpt-5.5":
+    #   enabled: true
+    #   effort: "high"
+
   # 模型名称映射: 支持正则表达式
   # 格式: "copilot中看到的模型名": "目标供应商的模型名"
   model_mapping:
