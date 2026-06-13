@@ -17,6 +17,10 @@ on:
   # 允许手动触发
   workflow_dispatch:
 
+# 强制使用 Node.js 24（GitHub 从 2026-06-16 起默认使用 Node.js 24）
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: write
 
@@ -27,10 +31,10 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: 设置 Node.js 18
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 18
           cache: npm
@@ -51,21 +55,21 @@ jobs:
         run: ls -lh dist/
 
       - name: 上传构建产物 (Windows)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: modelproxy-win-x64
           path: dist/model-proxy-win-x64.exe
           if-no-files-found: error
 
       - name: 上传构建产物 (Linux)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: modelproxy-linux-x64
           path: dist/model-proxy-linux-x64
           if-no-files-found: error
 
       - name: 上传构建产物 (macOS)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: modelproxy-macos-x64
           path: dist/model-proxy-macos-x64
@@ -83,7 +87,7 @@ jobs:
           cp dist/model-proxy-win-x64.exe dist/extra/modelproxy.exe 2>/dev/null || true
 
       - name: 上传附加资源
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: modelproxy-extra
           path: dist/extra/*
@@ -99,10 +103,10 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: 下载所有构建产物
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
 
       - name: 准备 Release 文件
         run: |
