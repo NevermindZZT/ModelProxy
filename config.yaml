@@ -21,6 +21,23 @@ target:
   # API 基础地址
   base_url: "https://api.deepseek.com"
   
+  # API Key（可选）
+  # 如果留空，代理将使用 Android Studio Copilot 插件中填写的 API Key 直接透传到目标供应商
+  # 这意味着你不需要在这里配置 key，直接在 Android Studio 的 Copilot 设置中填写即可
+  # 例如：配置供应商为 OpenAI，在 API Key 字段填入你的 DeepSeek API Key
+  api_key: ""
+  
+  # 上下文窗口大小（可选）
+  # 如果 Copilot 插件显示的上下文大小与实际不符，可以在这里设置
+  # 支持两种格式：
+  #   1) 单一数值: 所有模型共用同一个上下文（如 1048576）
+  #   2) 按模型配置: 每个源模型名独立指定
+  # 留空则自动推断（通常 Copilot 能识别的模型名会自动匹配正确的上下文）
+  context_window:
+    default: 1048576
+    # "gpt-4o-mini": 65536
+    # "claude-3-5-sonnet-20241022": 200000
+
   # 模型名称映射: 支持正则表达式
   # 格式: "copilot中看到的模型名": "目标供应商的模型名"
   model_mapping:

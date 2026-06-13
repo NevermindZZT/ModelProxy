@@ -14,8 +14,10 @@ function loadConfig() {
     logger.info('配置文件加载成功:', CONFIG_PATH);
 
     // 验证必要配置
-    if (!config.target || !config.target.api_key || config.target.api_key === 'sk-your-deepseek-api-key-here') {
-      logger.warn('⚠ 请在 config.yaml 中配置目标供应商的 API Key');
+    // api_key 为可选项 — 如果未配置，代理将从原始请求的 Authorization 头中提取
+    const hasApiKey = config.target && config.target.api_key && config.target.api_key.trim() !== '';
+    if (!hasApiKey) {
+      logger.info('ℹ 未在配置文件中设置 API Key，将使用原始请求中的 Authorization 头');
     }
     if (!config.target || !config.target.base_url) {
       logger.error('❌ 缺少 target.base_url 配置');

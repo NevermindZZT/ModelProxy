@@ -20,6 +20,22 @@ class OpenAIBackedAdapter {
     this.apiKey = config.target.api_key;
     this.modelMapping = config.target.model_mapping || {};
     this.defaultModel = this.modelMapping.default || 'deepseek-chat';
+    // context_window 支持两种格式：
+    //   数字: 所有模型共用（如 1048576）
+    //   对象: 按源模型名区分（如 { default: 1048576, "gpt-4o-mini": 65536 }）
+    this.contextWindowConfig = config.target.context_window || null;
+  }
+
+  /**
+   * 获取指定模型的上下文窗口大小
+   * 优先按模型名查找，找不到则用默认值
+   */
+  getContextWindow(modelId) {
+    if (!this.contextWindowConfig) return null;
+    if (typeof this.contextWindowConfig === 'object') {
+      return this.contextWindowConfig[modelId] || this.contextWindowConfig.default || null;
+    }
+    return this.contextWindowConfig;
   }
 
   /**
@@ -38,33 +54,62 @@ class OpenAIBackedAdapter {
   }
 
   /**
+   * 从请求头中提取 API Key（Bearer Token）
+   * 优先使用原始请求中的 Authorization 头，而非配置文件中的 api_key
+   */
+  static extractBearerToken(headers) {
+    const authHeader = headers['authorization'] || headers['Authorization'] || '';
+    if (authHeader.startsWith('Bearer ')) {
+      return authHeader.substring(7).trim();
+    }
+    return null;
+  }
+
+  /**
    * 处理请求
+   * 从原始请求的 Authorization 头中提取 API Key，用于转发到目标供应商
+   * 
+   * 注意：/v1/models（模型列表刷新）不需要 API Key，先处理路由再检查认证。
    */
   async handle(method, pathname, headers, body) {
     const targetUrl = this.targetBaseUrl + pathname;
     logger.info(`[OpenAI→Target] ${method} ${pathname}`);
 
+    // 模型列表请求不需要 API Key（返回静态列表），直接处理
     if (method === 'GET' && pathname === '/v1/models') {
       return this.handleModels();
     }
 
+    // 其他请求需要 API Key：优先使用原始请求中的 Authorization 头
+    const requestApiKey = OpenAIBackedAdapter.extractBearerToken(headers) || this.apiKey;
+    if (!requestApiKey) {
+      logger.warn('  未找到 API Key（配置文件中未设置且请求中未携带 Authorization 头）');
+      return this.errorResponse(401, 'API Key is required. Please set it in Android Studio Copilot plugin or config.yaml');
+    }
+
+    if (!headers['authorization'] && !headers['Authorization']) {
+      logger.info('  使用配置文件中的 API Key（请求未携带 Authorization 头）');
+    } else {
+      logger.info('  使用原始请求中的 API Key');
+    }
+
     if (method === 'POST') {
       if (pathname === '/v1/chat/completions') {
-        return this.handleChatCompletions(body);
+        return this.handleChatCompletions(body, requestApiKey);
       }
       if (pathname === '/v1/completions') {
-        return this.handleCompletions(body);
+        return this.handleCompletions(body, requestApiKey);
       }
     }
 
     // 默认直接透传
-    return this.forwardToTarget(method, targetUrl, headers, body);
+    return this.forwardToTarget(method, targetUrl, headers, body, requestApiKey);
   }
 
   /**
    * 处理聊天补全请求
    */
-  async handleChatCompletions(body) {
+  async handleChatCompletions(body, apiKey) {
     // 解析请求体
     let requestBody;
     try {
@@ -79,17 +124,17 @@ class OpenAIBackedAdapter {
     
     logger.info(`  模型映射: ${originalModel} → ${requestBody.model}`);
 
-    // 转发到目标 API
+    // 转发到目标 API，使用传入的 API Key
     return this.forwardToTarget('POST', this.targetBaseUrl + '/v1/chat/completions', {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.apiKey}`,
-    }, JSON.stringify(requestBody));
+      'Authorization': `Bearer ${apiKey}`,
+    }, JSON.stringify(requestBody), apiKey);
   }
 
   /**
    * 处理文本补全请求
    */
-  async handleCompletions(body) {
+  async handleCompletions(body, apiKey) {
     let requestBody;
     try {
       requestBody = JSON.parse(body);
@@ -104,32 +149,54 @@ class OpenAIBackedAdapter {
 
     return this.forwardToTarget('POST', this.targetBaseUrl + '/v1/completions', {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.apiKey}`,
-    }, JSON.stringify(requestBody));
+      'Authorization': `Bearer ${apiKey}`,
+    }, JSON.stringify(requestBody), apiKey);
   }
 
   /**
    * 处理模型列表请求
+   * 
+   * 返回 Copilot 端可识别的源模型名（model_mapping 的键），而非目标模型名。
+   * 这样 Copilot 能认出 gpt-4o、claude-3-5-sonnet 等模型，自动匹配正确的上下文大小。
+   * 同时附带 context_window 信息，供支持该字段的客户端使用。
    */
   async handleModels() {
+    // 收集所有源模型名（model_mapping 的键，排除 'default'）
+    const sourceModels = Object.keys(this.modelMapping).filter(k => k !== 'default');
+    // 去重（多个源模型可能映射到同一目标）
+    const uniqueModels = [...new Set(sourceModels)];
+
+    const models = uniqueModels.map(id => {
+      const cw = this.getContextWindow(id);
+      const model = {
+        id: id,
+        object: 'model',
+        created: Math.floor(Date.now() / 1000),
+        owned_by: 'model-proxy',
+      };
+      if (cw) {
+        model.max_input_tokens = cw;
+        model.context_window = cw;
+      }
+      return model;
+    });
+
+    // 确保默认模型也在列表中
+    const hasDefault = models.some(m => m.id === this.defaultModel);
+    if (!hasDefault && !uniqueModels.includes(this.defaultModel)) {
+      const cw = this.getContextWindow(this.defaultModel);
+      models.push({
+        id: this.defaultModel,
+        object: 'model',
+        created: Math.floor(Date.now() / 1000),
+        owned_by: 'model-proxy',
+        ...(cw ? { max_input_tokens: cw, context_window: cw } : {}),
+      });
+    }
+
     const responseBody = JSON.stringify({
       object: 'list',
-      data: [
-        {
-          id: this.defaultModel,
-          object: 'model',
-          created: Math.floor(Date.now() / 1000),
-          owned_by: 'model-proxy',
-        },
-        ...Object.values(this.modelMapping)
-          .filter(m => m !== 'default')
-          .map(m => ({
-            id: m,
-            object: 'model',
-            created: Math.floor(Date.now() / 1000),
-            owned_by: 'model-proxy',
-          }))
-      ],
+      data: models,
     });
 
     return {
@@ -145,8 +212,13 @@ class OpenAIBackedAdapter {
 
   /**
    * 转发请求到目标 API
+   * @param {string} method - HTTP 方法
+   * @param {string} url - 目标 URL
+   * @param {object} headers - 请求头
+   * @param {string} body - 请求体
+   * @param {string} apiKey - 用于转发的 API Key（来自原始请求或配置文件）
    */
-  forwardToTarget(method, url, headers, body) {
+  forwardToTarget(method, url, headers, body, apiKey) {
     return new Promise((resolve, reject) => {
       const parsedUrl = new URL(url);
       const isHttps = parsedUrl.protocol === 'https:';
@@ -163,8 +235,8 @@ class OpenAIBackedAdapter {
         timeout: 300000, // 5 分钟超时
       };
 
-      // 确保 Authorization header 使用目标的 API Key
-      options.headers['Authorization'] = `Bearer ${this.apiKey}`;
+      // 使用传入的 API Key（来自原始请求）向目标供应商认证
+      options.headers['Authorization'] = `Bearer ${apiKey}`;
 
       const lib = isHttps ? https : http;
       const req = lib.request(options, (res) => {

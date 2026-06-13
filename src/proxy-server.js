@@ -536,14 +536,22 @@ code { background:#eee; padding:2px 6px; border-radius:3px; font-size:13px; }
     });
 
     serverSocket.on('error', (err) => {
-      logger.error(`[隧道] ${hostname}:${port} 连接失败: ${err.message}`);
-      clientSocket.write('HTTP/1.1 502 Proxy Error\r\n\r\n');
+      // ECONNRESET / ECONNREFUSED 对透传隧道来说是正常行为，不污染 error 日志
+      if (err.code === 'ECONNRESET' || err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+        logger.debug(`[隧道] ${hostname}:${port} ${err.code}（预期行为，不影响代理功能）`);
+      } else {
+        logger.warn(`[隧道] ${hostname}:${port} 连接失败: ${err.message}`);
+      }
+      try {
+        clientSocket.write('HTTP/1.1 502 Proxy Error\r\n\r\n');
+      } catch (_) { /* socket 可能已关闭 */ }
       clientSocket.destroy();
     });
 
     clientSocket.on('error', (err) => {
+      // ECONNRESET 是客户端关闭连接后的预期行为，无需记录
       if (err.code !== 'ECONNRESET') {
-        logger.error(`[隧道] 客户端 ${hostname}: ${err.message}`);
+        logger.warn(`[隧道] 客户端 ${hostname}: ${err.message}`);
       }
     });
   }

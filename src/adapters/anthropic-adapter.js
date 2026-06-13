@@ -21,6 +21,22 @@ class AnthropicAdapter {
     this.apiKey = config.target.api_key;
     this.modelMapping = config.target.model_mapping || {};
     this.defaultModel = this.modelMapping.default || 'deepseek-chat';
+    // context_window 支持两种格式：
+    //   数字: 所有模型共用（如 1048576）
+    //   对象: 按源模型名区分（如 { default: 1048576, "gpt-4o-mini": 65536 }）
+    this.contextWindowConfig = config.target.context_window || null;
+  }
+
+  /**
+   * 获取指定模型的上下文窗口大小
+   * 优先按模型名查找，找不到则用默认值
+   */
+  getContextWindow(modelId) {
+    if (!this.contextWindowConfig) return null;
+    if (typeof this.contextWindowConfig === 'object') {
+      return this.contextWindowConfig[modelId] || this.contextWindowConfig.default || null;
+    }
+    return this.contextWindowConfig;
   }
 
   canHandle(method, pathname) {
@@ -32,15 +48,56 @@ class AnthropicAdapter {
     return anthropicPaths.some(p => pathname === p || pathname.startsWith(p + '?'));
   }
 
+  /**
+   * 从请求头中提取 API Key
+   * Anthropic 支持两种认证方式：
+   *   - x-api-key 头（Anthropic 标准方式）
+   *   - Authorization: Bearer 头（OpenAI 兼容方式）
+   * 优先使用原始请求中的密钥，而非配置文件中的 api_key
+   */
+  static extractApiKey(headers) {
+    // 先检查 x-api-key（Anthropic 的标准认证头）
+    const xApiKey = headers['x-api-key'];
+    if (xApiKey && xApiKey.trim()) {
+      return xApiKey.trim();
+    }
+    // 再检查 Authorization: Bearer
+    const authHeader = headers['authorization'] || headers['Authorization'] || '';
+    if (authHeader.startsWith('Bearer ')) {
+      return authHeader.substring(7).trim();
+    }
+    return null;
+  }
+
   async handle(method, pathname, headers, body) {
     logger.info(`[Anthropic→Target] ${method} ${pathname}`);
 
+    // 模型列表请求不需要 API Key，直接处理
     if (method === 'GET' && pathname === '/v1/models') {
       return this.handleModels();
     }
 
+    // 其他请求需要 API Key：优先使用原始请求中的认证头
+    const requestApiKey = AnthropicAdapter.extractApiKey(headers) || this.apiKey;
+    if (!requestApiKey) {
+      logger.warn('  未找到 API Key（配置文件中未设置且请求中未携带认证头）');
+      return {
+        statusCode: 401,
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+        body: JSON.stringify({
+          error: { message: 'API Key is required. Please set it in Android Studio Copilot plugin or config.yaml', type: 'proxy_error' },
+        }),
+      };
+    }
+
+    if (!headers['x-api-key'] && !headers['authorization'] && !headers['Authorization']) {
+      logger.info('  使用配置文件中的 API Key（请求未携带认证头）');
+    } else {
+      logger.info('  使用原始请求中的 API Key');
+    }
+
     if (method === 'POST' && pathname === '/v1/messages') {
-      return this.handleMessages(body);
+      return this.handleMessages(body, requestApiKey);
     }
 
     return this.errorResponse(404, `Unsupported endpoint: ${method} ${pathname}`);
@@ -50,7 +107,7 @@ class AnthropicAdapter {
    * 将 Anthropic Messages API 请求转换为 OpenAI Chat Completions API 请求
    * 并转发到目标供应商
    */
-  async handleMessages(body) {
+  async handleMessages(body, apiKey) {
     let anthropicReq;
     try {
       anthropicReq = JSON.parse(body);
@@ -66,14 +123,15 @@ class AnthropicAdapter {
     // 构建 OpenAI 格式的请求
     const openaiReq = this.anthropicToOpenAI(anthropicReq, targetModel);
 
-    // 转发到目标 API
+    // 转发到目标 API，使用传入的 API Key
     return this.forwardToTarget('POST', 
       this.targetBaseUrl + '/v1/chat/completions',
       {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
+        'Authorization': `Bearer ${apiKey}`,
       },
-      JSON.stringify(openaiReq)
+      JSON.stringify(openaiReq),
+      apiKey
     );
   }
 
@@ -246,16 +304,39 @@ class AnthropicAdapter {
   }
 
   async handleModels() {
-    const responseBody = JSON.stringify({
-      data: [
-        {
-          type: 'model',
-          id: this.defaultModel,
-          display: this.defaultModel,
-          created_at: new Date().toISOString(),
-        },
-      ],
+    // 收集所有源模型名（model_mapping 的键，排除 'default'）
+    const sourceModels = Object.keys(this.modelMapping).filter(k => k !== 'default');
+    const uniqueModels = [...new Set(sourceModels)];
+
+    const models = uniqueModels.map(id => {
+      const cw = this.getContextWindow(id);
+      const model = {
+        type: 'model',
+        id: id,
+        display: id,
+        created_at: new Date().toISOString(),
+      };
+      if (cw) {
+        model.max_input_tokens = cw;
+        model.context_window = cw;
+      }
+      return model;
     });
+
+    // 确保默认模型也在列表中
+    const hasDefault = models.some(m => m.id === this.defaultModel);
+    if (!hasDefault && !uniqueModels.includes(this.defaultModel)) {
+      const cw = this.getContextWindow(this.defaultModel);
+      models.push({
+        type: 'model',
+        id: this.defaultModel,
+        display: this.defaultModel,
+        created_at: new Date().toISOString(),
+        ...(cw ? { max_input_tokens: cw, context_window: cw } : {}),
+      });
+    }
+
+    const responseBody = JSON.stringify({ data: models });
 
     return {
       statusCode: 200,
@@ -268,7 +349,7 @@ class AnthropicAdapter {
     };
   }
 
-  forwardToTarget(method, url, headers, body) {
+  forwardToTarget(method, url, headers, body, apiKey) {
     return new Promise((resolve, reject) => {
       const parsedUrl = new URL(url);
       const isHttps = parsedUrl.protocol === 'https:';
@@ -285,7 +366,8 @@ class AnthropicAdapter {
         timeout: 300000,
       };
 
-      options.headers['Authorization'] = `Bearer ${this.apiKey}`;
+      // 使用传入的 API Key（来自原始请求）向目标供应商认证
+      options.headers['Authorization'] = `Bearer ${apiKey}`;
 
       const lib = isHttps ? https : http;
       const req = lib.request(options, (res) => {
