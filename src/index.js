@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const { loadConfig, getConfig } = require('./config');
+const { getConfigManager } = require('./config-manager');
 const logger = require('./logger');
 const ProxyServer = require('./proxy-server');
 const { getRootCACertPath, getRootCACrtPath } = require('./cert-manager');
@@ -77,15 +78,19 @@ function main() {
     process.exit(0);
   }
 
-  // 加载配置
-  const config = loadConfig();
+  // 加载配置 — 使用 ConfigManager（支持热加载）
+  const configManager = getConfigManager();
+  const config = configManager.load();
   logger.setLevel(config.log_level || 'info');
+
+  // 启动配置文件监听（外部修改自动重载）
+  configManager.watch();
 
   // 打印安装说明
   printInstallInstructions();
 
-  // 启动代理服务器
-  const proxy = new ProxyServer(config);
+  // 启动代理服务器 - 传入 configManager 而非静态 config
+  const proxy = new ProxyServer(configManager);
   proxy.start().catch(err => {
     logger.error('启动代理服务器失败:', err.message);
     process.exit(1);

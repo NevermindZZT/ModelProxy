@@ -4,3 +4,9 @@ certs/*.key
 certs/*.crt
 *.log
 .DS_Store
+dist/
+*.blob
+sea-config.json
+.vscode/
+.codegraph
+.resonix

@@ -19,14 +19,53 @@ const LLM_INFERENCE_PATHS = [
 ];
 
 class RequestRouter {
-  constructor(config) {
-    this.config = config;
-    this.interceptDomains = new Set(config.intercept_domains || []);
-    this.smartInterceptDomains = new Set(config.smart_intercept_domains || []);
+  constructor(configManager) {
+    this.configManager = configManager;
     
-    // 初始化适配器
-    this.openaiAdapter = new OpenAIBackedAdapter(config);
-    this.anthropicAdapter = new AnthropicAdapter(config);
+    // 初始化适配器 — 传入 configManager 使其支持热加载
+    this.openaiAdapter = new OpenAIBackedAdapter(configManager);
+    this.anthropicAdapter = new AnthropicAdapter(configManager);
+
+    // 监听配置变更，更新内部状态
+    this._unwatch = configManager.onChange((config) => {
+      this._refreshDomains(config);
+      // 适配器会自动读取最新配置
+    });
+  }
+
+  /**
+   * 获取当前配置（快捷方式）
+   */
+  get _config() {
+    return this.configManager.get();
+  }
+
+  /**
+   * 刷新域名拦截列表
+   */
+  _refreshDomains(config) {
+    this._interceptDomains = new Set(config.intercept_domains || []);
+    this._smartInterceptDomains = new Set(config.smart_intercept_domains || []);
+  }
+
+  /**
+   * 获取拦截域名列表（惰性初始化）
+   */
+  get interceptDomains() {
+    if (!this._interceptDomains) {
+      this._refreshDomains(this._config);
+    }
+    return this._interceptDomains;
+  }
+
+  /**
+   * 获取智能拦截域名列表
+   */
+  get smartInterceptDomains() {
+    if (!this._smartInterceptDomains) {
+      this._refreshDomains(this._config);
+    }
+    return this._smartInterceptDomains;
   }
 
   /**

@@ -117,6 +117,90 @@ npm run dev
 | 百度千帆 | OpenAI 兼容 | `base_url: "https://qianfan.baidubce.com/v2"` |
 | 硅基流动 | OpenAI 兼容 | `base_url: "https://api.siliconflow.cn/v1"` |
 
+## 在线管理面板（Web UI 配置）
+
+ModelProxy 内置了一个 Web 管理面板，可以在浏览器中直接修改配置，**无需重启代理**。
+
+### 使用方式
+
+启动代理后，打开浏览器访问：
+
+```
+http://127.0.0.1:8080/_modelproxy/admin
+```
+
+（如果修改了端口，替换 8080 为你的端口）
+
+### 功能
+
+| 功能 | 说明 |
+|------|------|
+| 🎯 **目标供应商** | 修改 Base URL、API Key、供应商类型、监听地址、日志级别 |
+| 🔄 **模型映射** | 添加/删除/修改模型名称映射关系 |
+| 🧠 **思考模式** | 按模型配置 thinking/reasoning 参数（DeepSeek V4 等） |
+| 🌐 **拦截域名** | 管理直接拦截和智能拦截的域名列表 |
+| 💾 **保存配置** | 修改后点击保存，配置立即写入文件并热加载生效 |
+
+### 配置 API
+
+管理面板背后提供了一套 REST API，方便集成到其他工具中：
+
+```bash
+# 获取当前配置
+curl http://127.0.0.1:8080/_modelproxy/config
+
+# 更新配置（部分更新）
+curl -X PUT http://127.0.0.1:8080/_modelproxy/config \
+  -H "Content-Type: application/json" \
+  -d '{"target.base_url": "https://api.deepseek.com", "target.model_mapping": {...}}'
+
+# 从文件重新加载配置
+curl -X POST http://127.0.0.1:8080/_modelproxy/reload
+
+# 健康检查
+curl http://127.0.0.1:8080/_modelproxy/health
+```
+
+## 打包发布
+
+可以将 ModelProxy 打包成单个可执行文件，用户无需安装 Node.js 即可运行。
+
+### 方式一：使用 pkg（推荐，最成熟）
+
+```bash
+# 安装构建工具
+npm install
+
+# 构建（生成 Windows/Linux/macOS 三平台可执行文件）
+npm run build:pkg
+
+# 构建产物在 dist/ 目录
+ls dist/
+# model-proxy-win-x64.exe
+# model-proxy-linux-x64
+# model-proxy-macos-x64
+```
+
+### 方式二：使用 Node.js SEA（Node.js >= 20.11.0）
+
+```bash
+# 构建
+npm run build:sea
+
+# 构建产物在 dist/ 目录
+ls dist/
+# model-proxy-win-x64.exe  (Windows)
+```
+
+### 直接运行（无需打包）
+
+```bash
+# 确保已安装 Node.js 18+
+npm start
+```
+
+也可以直接用 `start.bat`（Windows）或 `start.ps1`（PowerShell）启动。
+
 ## 命令参考
 
 ```bash
@@ -131,6 +215,9 @@ node src/index.js -c, --install-cert
 
 # 显示帮助
 node src/index.js -h, --help
+
+# 打开管理面板（启动后）
+# http://127.0.0.1:8080/_modelproxy/admin
 ```
 
 ## 技术架构
@@ -138,16 +225,25 @@ node src/index.js -h, --help
 ```
 src/
 ├── index.js              # 入口文件
-├── config.js             # 配置加载
+├── config.js             # 配置加载（兼容层）
+├── config-manager.js     # 配置管理器（热加载、运行时读写）
 ├── logger.js             # 日志工具
 ├── yaml-parser.js        # YAML 解析器
 ├── cert-manager.js       # SSL 证书生成与管理
-├── proxy-server.js       # HTTP/HTTPS 代理服务器核心
+├── proxy-server.js       # HTTP/HTTPS 代理服务器核心 + 管理 API
 ├── router.js             # 请求路由与拦截决策
 └── adapters/
     ├── openai-adapter.js     # OpenAI → 目标格式适配器
     └── anthropic-adapter.js  # Anthropic → OpenAI → 目标格式适配器
 ```
+
+## 配置热加载
+
+ModelProxy 支持三种配置更新方式，全部**无需重启**：
+
+1. **Web 管理面板** — 浏览器操作，一键保存生效
+2. **REST API** — `PUT /_modelproxy/config`，适合 CI/CD 集成
+3. **文件编辑** — 直接修改 `config.yaml`，自动检测变化并重载
 
 ## 注意事项
 
@@ -166,3 +262,6 @@ A: 修改 `config.yaml` 中的 `proxy.port` 为其他端口（如 8081）。
 
 **Q: 响应速度慢?**
 A: 请求需要经过两次网络传输（Android Studio → 代理 → 目标 API），这是正常现象。
+
+**Q: 配置改了没用？**
+A: 从 v1.0.0 开始，所有配置修改都会立即生效，无需重启代理。如果遇到配置未生效，可以尝试在管理面板中点击"从文件重新加载"。

@@ -3,12 +3,29 @@
   "version": "1.0.0",
   "description": "AI 模型 API 代理 - 将 Android Studio GitHub Copilot 请求转发到第三方模型供应商",
   "main": "src/index.js",
+  "bin": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "build:pkg": "pkg . --out-path dist --targets node18-win-x64,node18-linux-x64,node18-macos-x64 --compress GZip",
+    "build:sea": "node scripts/build-sea.js",
+    "build": "npm run build:pkg"
+  },
+  "pkg": {
+    "assets": [
+      "config.yaml",
+      "certs/**/*",
+      "src/**/*.js"
+    ],
+    "scripts": [
+      "src/**/*.js"
+    ]
   },
   "dependencies": {
     "commander": "^12.0.0",
     "node-forge": "^1.3.1"
+  },
+  "devDependencies": {
+    "@yao-pkg/pkg": "^5.12.0"
   }
 }

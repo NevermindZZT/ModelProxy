@@ -15,17 +15,43 @@ const logger = require('../logger');
  *   - GET  /v1/models            →  模型列表
  */
 class OpenAIBackedAdapter {
-  constructor(config) {
-    this.targetBaseUrl = config.target.base_url.replace(/\/+$/, '');
-    this.apiKey = config.target.api_key;
-    this.modelMapping = config.target.model_mapping || {};
-    this.defaultModel = this.modelMapping.default || 'deepseek-chat';
-    // context_window 支持两种格式：
-    //   数字: 所有模型共用（如 1048576）
-    //   对象: 按源模型名区分（如 { default: 1048576, "gpt-4o-mini": 65536 }）
-    this.contextWindowConfig = config.target.context_window || null;
-    // 模型思考/推理配置（支持按模型配置或统一配置）
-    this.rawThinkingConfig = config.target.thinking || null;
+  constructor(configManager) {
+    this.configManager = configManager;
+  }
+
+  /**
+   * 获取当前 target 配置（每次调用都从 ConfigManager 读取，支持热加载）
+   */
+  get _targetConfig() {
+    return this.configManager.get().target || {};
+  }
+
+  /**
+   * 获取目标 Base URL
+   */
+  get targetBaseUrl() {
+    return (this._targetConfig.base_url || 'https://api.deepseek.com').replace(/\/+$/, '');
+  }
+
+  /**
+   * 获取配置文件中的 API Key
+   */
+  get apiKey() {
+    return this._targetConfig.api_key || '';
+  }
+
+  /**
+   * 获取模型映射
+   */
+  get modelMapping() {
+    return this._targetConfig.model_mapping || {};
+  }
+
+  /**
+   * 获取默认模型名（始终从实时配置读取）
+   */
+  get defaultModel() {
+    return this.modelMapping.default || 'deepseek-chat';
   }
 
   /**
@@ -36,13 +62,14 @@ class OpenAIBackedAdapter {
    *   按模型格式时，key 为目标模型名（即 model_mapping 的值），而非 Copilot 端的源模型名
    */
   getThinkingConfig(modelId) {
-    if (!this.rawThinkingConfig) return null;
+    const raw = this._targetConfig.thinking || null;
+    if (!raw) return null;
     // 统一格式：顶层有 enabled 字段
-    if (this.rawThinkingConfig.enabled !== undefined) {
-      return this.rawThinkingConfig;
+    if (raw.enabled !== undefined) {
+      return raw;
     }
     // 按模型格式：按模型名查找，找不到用 default
-    return this.rawThinkingConfig[modelId] || this.rawThinkingConfig.default || null;
+    return raw[modelId] || raw.default || null;
   }
 
   /**
@@ -50,11 +77,12 @@ class OpenAIBackedAdapter {
    * 优先按模型名查找，找不到则用默认值
    */
   getContextWindow(modelId) {
-    if (!this.contextWindowConfig) return null;
-    if (typeof this.contextWindowConfig === 'object') {
-      return this.contextWindowConfig[modelId] || this.contextWindowConfig.default || null;
+    const cw = this._targetConfig.context_window || null;
+    if (!cw) return null;
+    if (typeof cw === 'object') {
+      return cw[modelId] || cw.default || null;
     }
-    return this.contextWindowConfig;
+    return cw;
   }
 
   /**
