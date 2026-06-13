@@ -2,15 +2,16 @@ const fs = require('fs');
 const path = require('path');
 const forge = require('node-forge');
 const logger = require('./logger');
+const { getCertsDir, ensureDir } = require('./paths');
 
-const CERTS_DIR = path.resolve(__dirname, '..', 'certs');
+const CERTS_DIR = getCertsDir();
 const ROOT_CA_KEY_PATH = path.join(CERTS_DIR, 'root-ca-key.pem');
 const ROOT_CA_CERT_PATH = path.join(CERTS_DIR, 'root-ca-cert.pem');
 const ROOT_CA_CERT_CRT_PATH = path.join(CERTS_DIR, 'root-ca-cert.crt');
 const certCache = new Map();
 
 function ensureCertsDir() {
-  if (!fs.existsSync(CERTS_DIR)) fs.mkdirSync(CERTS_DIR, { recursive: true });
+  ensureDir(CERTS_DIR);
 }
 
 function getOrCreateRootCA() {

@@ -9,11 +9,9 @@
  */
 
 const fs = require('fs');
-const path = require('path');
 const YAML = require('./yaml-parser');
 const logger = require('./logger');
-
-const CONFIG_PATH = path.resolve(__dirname, '..', 'config.yaml');
+const { getConfigPath } = require('./paths');
 
 class ConfigManager {
   constructor() {
@@ -27,9 +25,9 @@ class ConfigManager {
    */
   load() {
     try {
-      const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
+      const raw = fs.readFileSync(getConfigPath(), 'utf-8');
       this._config = YAML.parse(raw);
-      logger.info('配置文件加载成功:', CONFIG_PATH);
+      logger.info('配置文件加载成功:', getConfigPath());
 
       // 验证必要配置
       const rawKey = this._config.target && this._config.target.api_key;
@@ -133,8 +131,8 @@ class ConfigManager {
   save() {
     try {
       const yaml = this._toYAML(this._config);
-      fs.writeFileSync(CONFIG_PATH, yaml, 'utf-8');
-      logger.info('配置已保存到:', CONFIG_PATH);
+      fs.writeFileSync(getConfigPath(), yaml, 'utf-8');
+      logger.info('配置已保存到:', getConfigPath());
       return true;
     } catch (err) {
       logger.error('保存配置失败:', err.message);
@@ -207,11 +205,11 @@ class ConfigManager {
   watch() {
     if (this._watcher) return;
     try {
-      this._watcher = fs.watch(CONFIG_PATH, (eventType) => {
+      this._watcher = fs.watch(getConfigPath(), (eventType) => {
         if (eventType === 'change') {
           logger.info('检测到配置文件外部修改，正在重新加载...');
           try {
-            const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
+            const raw = fs.readFileSync(getConfigPath(), 'utf-8');
             const newConfig = YAML.parse(raw);
             this._config = newConfig;
             this._notifyListeners();
@@ -221,7 +219,7 @@ class ConfigManager {
           }
         }
       });
-      logger.info('配置文件监听已启动:', CONFIG_PATH);
+      logger.info('配置文件监听已启动:', getConfigPath());
     } catch (err) {
       logger.warn(`无法监听配置文件变化: ${err.message}`);
     }

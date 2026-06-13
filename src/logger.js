@@ -1,13 +1,14 @@
 const fs = require('fs');
 const path = require('path');
+const { getLogPath } = require('./paths');
 
 const LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 
 let currentLevel = 'info';
 let logFileStream = null;
 
-// 日志文件路径（与配置文件同目录）
-const LOG_FILE = path.resolve(__dirname, '..', 'proxy.log');
+// 日志文件路径（使用 paths.js 获取运行时物理路径）
+const LOG_FILE = getLogPath();
 
 function setLevel(level) {
   if (LEVELS[level] !== undefined) {

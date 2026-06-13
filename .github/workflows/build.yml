@@ -33,23 +33,23 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v6
 
-      - name: 设置 Node.js 18
+      - name: 设置 Node.js 24
         uses: actions/setup-node@v6
         with:
-          node-version: 18
+          node-version: 24
           cache: npm
 
       - name: 安装依赖
         run: npm ci
 
       - name: 构建 Windows x64
-        run: npx pkg . --targets node18-win-x64 --output dist/model-proxy-win-x64.exe --compress GZip
+        run: npx pkg . --targets node24-win-x64 --output dist/model-proxy-win-x64.exe --compress GZip
 
       - name: 构建 Linux x64
-        run: npx pkg . --targets node18-linux-x64 --output dist/model-proxy-linux-x64 --compress GZip
+        run: npx pkg . --targets node24-linux-x64 --output dist/model-proxy-linux-x64 --compress GZip
 
       - name: 构建 macOS x64
-        run: npx pkg . --targets node18-macos-x64 --output dist/model-proxy-macos-x64 --compress GZip
+        run: npx pkg . --targets node24-macos-x64 --output dist/model-proxy-macos-x64 --compress GZip
 
       - name: 列出构建产物
         run: ls -lh dist/
