@@ -43,13 +43,13 @@ jobs:
         run: npm ci
 
       - name: 构建 Windows x64
-        run: npx pkg . --out-path dist --targets node18-win-x64 --compress GZip
+        run: npx pkg . --targets node18-win-x64 --output dist/model-proxy-win-x64.exe --compress GZip
 
       - name: 构建 Linux x64
-        run: npx pkg . --out-path dist --targets node18-linux-x64 --compress GZip
+        run: npx pkg . --targets node18-linux-x64 --output dist/model-proxy-linux-x64 --compress GZip
 
       - name: 构建 macOS x64
-        run: npx pkg . --out-path dist --targets node18-macos-x64 --compress GZip
+        run: npx pkg . --targets node18-macos-x64 --output dist/model-proxy-macos-x64 --compress GZip
 
       - name: 列出构建产物
         run: ls -lh dist/
@@ -83,8 +83,8 @@ jobs:
           cp start.bat dist/extra/ 2>/dev/null || true
           cp start.ps1 dist/extra/ 2>/dev/null || true
           cp README.md dist/extra/ 2>/dev/null || true
-          # 复制 Win 可执行文件到 extra（方便用户直接下载整个包）
-          cp dist/model-proxy-win-x64.exe dist/extra/modelproxy.exe 2>/dev/null || true
+          # 复制 Win 可执行文件到 extra 并重命名为 modelproxy.exe（方便用户直接下载使用）
+          cp dist/model-proxy-win-x64.exe dist/extra/modelproxy.exe
 
       - name: 上传附加资源
         uses: actions/upload-artifact@v6
