@@ -269,12 +269,17 @@ class ProxyServer {
         key: certData.key,
         cert: certData.cert,
         isServer: true,
+        // ★ 添加 ALPN 支持：某些客户端（如 Copilot 插件通过 OkHttp）需要 ALPN 协商
+        // 同时支持 HTTP/1.1 和 HTTP/2，如果客户端用 h2，我们的 HTTP 解析可能会失败，
+        // 但至少 TLS 握手能完成，我们可以根据实际情况再适配
+        ALPNProtocols: ['http/1.1', 'h2'],
         SNICallback: (servername, cb) => {
           try {
             const snCert = generateCertForDomain(this.rootCA, servername);
             cb(null, tls.createSecureContext({
               key: snCert.key,
               cert: snCert.cert,
+              ALPNProtocols: ['http/1.1', 'h2'],
             }));
           } catch (err) {
             cb(err);
@@ -286,7 +291,8 @@ class ProxyServer {
 
       tlsSocket.on('secure', () => {
         const cipher = tlsSocket.getCipher();
-        logger.info(`[MITM] TLS 握手成功: ${hostname} (加密: ${cipher?.name || 'unknown'})`);
+        const alpn = tlsSocket.alpnProtocol || 'none';
+        logger.info(`[MITM] TLS 握手成功: ${hostname} (加密: ${cipher?.name || 'unknown'}, ALPN: ${alpn})`);
 
         // 如果有 head 数据（可能包含 ClientHello 之后的早期数据），喂给 TLS socket
         if (head && head.length > 0) {

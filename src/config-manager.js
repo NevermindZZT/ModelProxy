@@ -44,11 +44,17 @@ class ConfigManager {
       if (!this._config.proxy) {
         this._config.proxy = { host: '127.0.0.1', port: 8080 };
       }
+      if (!this._config.target.models) {
+        this._config.target.models = {};
+      }
       if (!this._config.target.model_mapping) {
         this._config.target.model_mapping = { default: 'deepseek-chat' };
       }
       if (!this._config.intercept_domains) {
-        this._config.intercept_domains = ['api.openai.com', 'api.anthropic.com'];
+        this._config.intercept_domains = [
+          'api.openai.com',
+          'api.anthropic.com',
+        ];
       }
       if (!this._config.smart_intercept_domains) {
         this._config.smart_intercept_domains = [];

@@ -4,37 +4,55 @@ proxy:
 target:
   type: openai-compatible
   base_url: "https://api.deepseek.com"
+  # api_key: 转发到目标供应商时使用
+  # - 模型列表使用 Copilot 中填写的 API Key 请求真实供应商
+  # - 聊天请求使用此配置的 API Key 转发到目标供应商（如 DeepSeek）
   api_key: ""
-  context_window:
-    default: 1048576
-  thinking:
-    default:
-      enabled: false
-    deepseek-v4-flash:
-      enabled: true
-      effort: high
-    deepseek-v4-pro:
-      enabled: true
-      effort: high
-  model_mapping:
-    gpt-4o: deepseek-v4-flash
-    gpt-4o-mini: deepseek-v4-flash
-    gpt-4-turbo: deepseek-v4-flash
-    gpt-3.5-turbo: deepseek-v4-flash
-    gpt-5.4: deepseek-v4-flash
-    gpt-5.5: deepseek-v4-pro
-    claude-3-opus-20240229: deepseek-v4-flash
-    claude-3-sonnet-20240229: deepseek-v4-flash
-    claude-3-haiku-20240307: deepseek-v4-flash
-    claude-3-5-sonnet-20241022: deepseek-v4-flash
-    claude-3-5-haiku-20241022: deepseek-v4-flash
-    default: deepseek-v4-flash
+
+  # 模型定义
+  # 每个模型可以定义完整能力：目标模型、上下文窗口、思考、视觉等
+  models:
+    gpt-5.4:
+      target_model: deepseek-v4-flash
+      name: "GPT-5.4"
+      context_window: 1048576
+      max_output_tokens: 64000
+      thinking: true
+      reasoning_effort: high
+      vision: false
+    gpt-5.5:
+      target_model: deepseek-v4-pro
+      name: "GPT-5.5"
+      context_window: 1048576
+      max_output_tokens: 64000
+      thinking: true
+      reasoning_effort: high
+      vision: false
+    claude-opus-4.7:
+      target_model: deepseek-v4-flash
+      name: "Claude Opus 4.7"
+      context_window: 1048576
+      max_output_tokens: 64000
+      thinking: true
+      reasoning_effort: high
+      vision: true
+    claude-opus-4.8:
+      target_model: deepseek-v4-pro
+      name: "Claude Opus 4.8"
+      context_window: 1048576
+      max_output_tokens: 64000
+      thinking: true
+      reasoning_effort: high
+      vision: true
+
+  # 默认模型（未在 models 中定义时使用）
+  default_model: deepseek-v4-flash
+  default_context_window: 1048576
 intercept_domains:
   - "api.openai.com"
   - "api.anthropic.com"
+  - "openrouter.ai"
   - "generativelanguage.googleapis.com"
   - "api.groq.com"
-  - "api.openrouter.ai"
-smart_intercept_domains:
-  - "openrouter.ai"
+smart_intercept_domains: []
 log_level: debug

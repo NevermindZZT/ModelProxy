@@ -163,7 +163,7 @@ class RequestRouter {
     // 使用 OpenAI 适配器（处理 OpenAI 和其他兼容的 API）
     if (this.openaiAdapter.canHandle(method, pathname)) {
       logger.info('  使用 OpenAI 适配器');
-      return this.openaiAdapter.handle(method, pathname, headers, body);
+      return this.openaiAdapter.handle(method, pathname, headers, body, hostname);
     }
 
     // 如果都不匹配，返回错误

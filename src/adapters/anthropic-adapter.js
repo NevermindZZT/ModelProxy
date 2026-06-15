@@ -42,30 +42,71 @@ class AnthropicAdapter {
   }
 
   /**
-   * 获取模型映射
+   * 获取模型映射（兼容旧的 model_mapping 格式）
    */
   get modelMapping() {
     return this._targetConfig.model_mapping || {};
   }
 
   /**
+   * 获取模型定义列表（新格式）
+   */
+  get models() {
+    return this._targetConfig.models || {};
+  }
+
+  /**
    * 获取默认模型名
    */
   get defaultModel() {
-    return this.modelMapping.default || 'deepseek-chat';
+    return this._targetConfig.default_model || 
+           this.modelMapping.default || 
+           'deepseek-chat';
+  }
+
+  /**
+   * 获取默认上下文窗口大小
+   */
+  get defaultContextWindow() {
+    return this._targetConfig.default_context_window || 1048576;
+  }
+
+  /**
+   * 获取模型的完整配置
+   */
+  getModelConfig(modelId) {
+    if (this.models[modelId]) {
+      return this.models[modelId];
+    }
+    return null;
   }
 
   /**
    * 获取指定模型的上下文窗口大小
-   * 优先按模型名查找，找不到则用默认值
    */
   getContextWindow(modelId) {
-    const cw = this._targetConfig.context_window || null;
-    if (!cw) return null;
-    if (typeof cw === 'object') {
-      return cw[modelId] || cw.default || null;
+    // 新格式
+    const modelConfig = this.getModelConfig(modelId);
+    if (modelConfig && modelConfig.context_window) {
+      return modelConfig.context_window;
     }
-    return cw;
+    // 旧格式
+    const cw = this._targetConfig.context_window || null;
+    if (cw) {
+      if (typeof cw === 'object') {
+        return cw[modelId] || cw.default || null;
+      }
+      return cw;
+    }
+    return this.defaultContextWindow;
+  }
+
+  /**
+   * 获取模型的名称（显示名）
+   */
+  getModelName(modelId) {
+    const config = this.getModelConfig(modelId);
+    return (config && config.name) || modelId;
   }
 
   canHandle(method, pathname) {
@@ -106,23 +147,23 @@ class AnthropicAdapter {
       return this.handleModels();
     }
 
-    // 其他请求需要 API Key：优先使用原始请求中的认证头
+    // 其他请求需要 API Key：使用 Copilot 中填写的 API Key
     const requestApiKey = AnthropicAdapter.extractApiKey(headers) || this.apiKey;
     if (!requestApiKey) {
-      logger.warn('  未找到 API Key（配置文件中未设置且请求中未携带认证头）');
+      logger.warn('  未找到 API Key（请在 Copilot 中填写或在配置文件中设置）');
       return {
         statusCode: 401,
         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
         body: JSON.stringify({
-          error: { message: 'API Key is required. Please set it in Android Studio Copilot plugin or config.yaml', type: 'proxy_error' },
+          error: { message: 'API Key is required. Please fill it in Copilot settings or config.yaml', type: 'proxy_error' },
         }),
       };
     }
 
     if (!headers['x-api-key'] && !headers['authorization'] && !headers['Authorization']) {
-      logger.info('  使用配置文件中的 API Key（请求未携带认证头）');
+      logger.info('  使用配置文件中的 API Key');
     } else {
-      logger.info('  使用原始请求中的 API Key');
+      logger.info('  使用 Copilot 中填写的 API Key');
     }
 
     if (method === 'POST' && pathname === '/v1/messages') {
@@ -151,9 +192,10 @@ class AnthropicAdapter {
 
     // 构建 OpenAI 格式的请求
     const openaiReq = this.anthropicToOpenAI(anthropicReq, targetModel);
+    this._lastOriginalModel = originalModel; // 保存原始模型名，供 forwardToTarget 中的响应转换使用
 
     // 转发到目标 API，使用传入的 API Key
-    return this.forwardToTarget('POST', 
+    const response = await this.forwardToTarget('POST', 
       this.targetBaseUrl + '/v1/chat/completions',
       {
         'Content-Type': 'application/json',
@@ -162,6 +204,16 @@ class AnthropicAdapter {
       JSON.stringify(openaiReq),
       apiKey
     );
+
+    // ★ 在响应头中添加上下文窗口大小信息
+    const contextWindow = this.getContextWindow(originalModel) || this.getContextWindow('default');
+    if (contextWindow) {
+      response.headers['x-llm-context-window'] = String(contextWindow);
+      response.headers['x-model-context-window'] = String(contextWindow);
+      response.headers['x-max-tokens'] = String(contextWindow);
+    }
+
+    return response;
   }
 
   /**
@@ -333,37 +385,37 @@ class AnthropicAdapter {
   }
 
   async handleModels() {
-    // 收集所有源模型名（model_mapping 的键，排除 'default'）
-    const sourceModels = Object.keys(this.modelMapping).filter(k => k !== 'default');
-    const uniqueModels = [...new Set(sourceModels)];
+    const now = new Date().toISOString();
+
+    // 收集所有源模型名
+    const modelIds = Object.keys(this.models);
+    for (const key of Object.keys(this.modelMapping)) {
+      if (key !== 'default' && !modelIds.includes(key)) {
+        modelIds.push(key);
+      }
+    }
+
+    const uniqueModels = [...new Set(modelIds)];
 
     const models = uniqueModels.map(id => {
+      const config = this.getModelConfig(id);
       const cw = this.getContextWindow(id);
-      const model = {
+      const maxOutput = (config && config.max_output_tokens) || 64000;
+      const supportsVision = (config && config.vision === true);
+
+      return {
         type: 'model',
         id: id,
-        display: id,
-        created_at: new Date().toISOString(),
+        display: this.getModelName(id),
+        created_at: now,
+        max_input_tokens: cw,
+        context_window: cw,
+        max_output_tokens: maxOutput,
+        capabilities: {
+          vision: supportsVision,
+        },
       };
-      if (cw) {
-        model.max_input_tokens = cw;
-        model.context_window = cw;
-      }
-      return model;
     });
-
-    // 确保默认模型也在列表中
-    const hasDefault = models.some(m => m.id === this.defaultModel);
-    if (!hasDefault && !uniqueModels.includes(this.defaultModel)) {
-      const cw = this.getContextWindow(this.defaultModel);
-      models.push({
-        type: 'model',
-        id: this.defaultModel,
-        display: this.defaultModel,
-        created_at: new Date().toISOString(),
-        ...(cw ? { max_input_tokens: cw, context_window: cw } : {}),
-      });
-    }
 
     const responseBody = JSON.stringify({ data: models });
 
@@ -407,6 +459,32 @@ class AnthropicAdapter {
           
           // 如果是流式响应，直接透传
           if (res.headers['content-type']?.includes('text/event-stream')) {
+            let body = rawBody.toString('utf-8');
+            // ★ 重写流式响应中的模型名
+            const origModel = this._lastOriginalModel || '';
+            if (origModel) {
+              const lines = body.split('\n');
+              let rewritten = false;
+              for (let i = 0; i < lines.length; i++) {
+                const line = lines[i];
+                if (line.startsWith('data: ') && line.includes('"model"')) {
+                  try {
+                    const dataStr = line.substring(6);
+                    if (dataStr === '[DONE]') continue;
+                    const chunk = JSON.parse(dataStr);
+                    if (chunk.model) {
+                      chunk.model = origModel;
+                      lines[i] = 'data: ' + JSON.stringify(chunk);
+                      rewritten = true;
+                    }
+                  } catch (e) { /* skip */ }
+                }
+              }
+              if (rewritten) {
+                body = lines.join('\n');
+                logger.info(`  ✅ Anthropic 流式响应模型名已重写为: ${origModel}`);
+              }
+            }
             resolve({
               statusCode: res.statusCode,
               headers: {
@@ -416,14 +494,15 @@ class AnthropicAdapter {
                 'Access-Control-Allow-Origin': '*',
                 'X-Proxy': 'ModelProxy',
               },
-              body: rawBody.toString('utf-8'),
+              body: body,
               isStream: true,
             });
             return;
           }
 
           // 非流式响应，转换格式
-          const responseBody = this.openAIResponseToAnthropic(rawBody.toString('utf-8'), '');
+          const origModel = this._lastOriginalModel || '';
+          const responseBody = this.openAIResponseToAnthropic(rawBody.toString('utf-8'), origModel);
           
           const responseHeaders = {
             'Content-Type': 'application/json',
@@ -457,6 +536,10 @@ class AnthropicAdapter {
 
   mapModel(originalModel) {
     if (!originalModel) return this.defaultModel;
+    // 新格式：从 models 中查找
+    const modelConfig = this.getModelConfig(originalModel);
+    if (modelConfig && modelConfig.target_model) return modelConfig.target_model;
+    // 旧格式：精确匹配
     if (this.modelMapping[originalModel]) return this.modelMapping[originalModel];
     
     for (const [pattern, target] of Object.entries(this.modelMapping)) {
