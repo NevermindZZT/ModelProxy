@@ -4,17 +4,11 @@ proxy:
 target:
   type: openai-compatible
   base_url: "https://api.deepseek.com"
-  # api_key: 转发到目标供应商时使用
-  # - 模型列表使用 Copilot 中填写的 API Key 请求真实供应商
-  # - 聊天请求使用此配置的 API Key 转发到目标供应商（如 DeepSeek）
   api_key: ""
-
-  # 模型定义
-  # 每个模型可以定义完整能力：目标模型、上下文窗口、思考、视觉等
   models:
     gpt-5.4:
       target_model: deepseek-v4-flash
-      name: "GPT-5.4"
+      name: GPT-5.4
       context_window: 1048576
       max_output_tokens: 64000
       thinking: true
@@ -22,7 +16,7 @@ target:
       vision: false
     gpt-5.5:
       target_model: deepseek-v4-pro
-      name: "GPT-5.5"
+      name: GPT-5.5
       context_window: 1048576
       max_output_tokens: 64000
       thinking: true
@@ -35,7 +29,7 @@ target:
       max_output_tokens: 64000
       thinking: true
       reasoning_effort: high
-      vision: true
+      vision: false
     claude-opus-4.8:
       target_model: deepseek-v4-pro
       name: "Claude Opus 4.8"
@@ -43,16 +37,16 @@ target:
       max_output_tokens: 64000
       thinking: true
       reasoning_effort: high
-      vision: true
-
-  # 默认模型（未在 models 中定义时使用）
+      vision: false
   default_model: deepseek-v4-flash
   default_context_window: 1048576
+  model_mapping:
+    default: deepseek-v4-flash
 intercept_domains:
   - "api.openai.com"
   - "api.anthropic.com"
   - "openrouter.ai"
   - "generativelanguage.googleapis.com"
   - "api.groq.com"
-smart_intercept_domains: []
-log_level: debug
+smart_intercept_domains: "[]"
+log_level: info

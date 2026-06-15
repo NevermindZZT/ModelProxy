@@ -50,7 +50,7 @@ class ProxyServer {
     server.listen(port, host, () => {
       logger.info('');
       logger.info('='.repeat(60));
-      logger.info('  ModelProxy v1.0.0');
+      logger.info('  ModelProxy v1.0.1');
       logger.info('='.repeat(60));
       logger.info(`  ✅ 代理服务器已启动: http://${host}:${port}`);
       logger.info('');
@@ -198,7 +198,7 @@ class ProxyServer {
         timestamp: new Date().toISOString(),
         intercept_domains: this.router.getInterceptDomains(),
         target: this.config.target.base_url,
-        version: '1.0.0',
+        version: '1.0.1',
       }));
       logger.info('[健康检查] 代理运行正常');
       return;
@@ -599,7 +599,7 @@ code { background:#eee; padding:2px 6px; border-radius:3px; font-size:13px; }
   <p>2. 或用命令行: <code>curl -x http://127.0.0.1:${this.config.proxy.port} https://api.openai.com/v1/models</code></p>
   <p>3. 查看日志文件: <code>type proxy.log</code> 或 <code>Get-Content proxy.log -Tail 20</code></p>
 </div>
-<div class="footer">ModelProxy v1.0.0 | ${new Date().toISOString()}</div>
+<div class="footer">ModelProxy v1.0.1 | ${new Date().toISOString()}</div>
 </body></html>`;
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -689,8 +689,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 
   <div class="tabs">
     <button class="tab active" data-tab="target">目标供应商</button>
-    <button class="tab" data-tab="mapping">模型映射</button>
-    <button class="tab" data-tab="thinking">思考模式</button>
+    <button class="tab" data-tab="models">模型定义</button>
     <button class="tab" data-tab="domains">拦截域名</button>
     <button class="tab" data-tab="advanced">高级</button>
   </div>
@@ -733,34 +732,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
           <option value="error">error</option>
         </select>
       </div>
-      <div class="form-group">
-        <label>默认上下文窗口 (context_window)</label>
-        <input type="number" id="contextWindowDefault" placeholder="1048576">
-      </div>
+      <p style="font-size:12px;color:var(--text-secondary);margin-top:-8px">上下文窗口在下方「模型定义」中按模型配置</p>
     </div>
   </div>
 
-  <!-- 模型映射 -->
-  <div class="panel" id="panel-mapping">
+  <!-- 模型定义（合并映射、能力、思考、视觉） -->
+  <div class="panel" id="panel-models">
     <div class="card">
-      <h3>模型名称映射</h3>
-      <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">左边是 Copilot 中的模型名，右边是目标供应商的模型名</p>
-      <div id="mappingList"></div>
-      <button class="add-btn" onclick="addMapping()">+ 添加映射</button>
-    </div>
-  </div>
-
-  <!-- 思考模式 -->
-  <div class="panel" id="panel-thinking">
-    <div class="card">
-      <h3>思考/推理配置</h3>
-      <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">按目标模型名（model_mapping 的值）配置。适用于 DeepSeek V4、OpenAI o1/o3 等</p>
-      <div class="checkbox-group" style="margin-bottom:16px">
-        <input type="checkbox" id="thinkingGlobalEnabled">
-        <label for="thinkingGlobalEnabled">全局启用思考模式（覆盖所有模型）</label>
-      </div>
-      <div id="thinkingList"></div>
-      <button class="add-btn" onclick="addThinking()">+ 添加模型思考配置</button>
+      <h3>模型定义</h3>
+      <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">定义每个模型的完整能力（目标模型、上下文窗口、思考、视觉等）。模型ID是 Copilot 中显示的模型名。</p>
+      <div id="modelsList"></div>
+      <button class="add-btn" onclick="addModel()">+ 添加模型</button>
     </div>
   </div>
 
@@ -804,7 +786,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     <button class="btn btn-success" onclick="saveConfig()" style="padding:12px 40px;font-size:16px">💾 保存配置</button>
   </div>
 
-  <div class="footer-info">ModelProxy v1.0.0 — 修改配置后点击保存，配置立即生效，无需重启代理</div>
+  <div class="footer-info">ModelProxy v1.0.1 — 修改配置后点击保存，配置立即生效，无需重启代理</div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -834,85 +816,76 @@ function renderConfig() {
   document.getElementById('proxyPort').value = p.port || 8080;
   document.getElementById('logLevel').value = config.log_level || 'info';
 
-  const cw = t.context_window || {};
-  document.getElementById('contextWindowDefault').value = cw.default || '';
-
-  // 模型映射
-  renderMappings(t.model_mapping || {});
-
-  // 思考模式
-  renderThinking(t.thinking || {});
+  // ★ 模型定义（合并映射+思考+视觉等所有能力）
+  renderModels(t.models || {});
 
   // 拦截域名
-  renderDomains('interceptDomains', config.intercept_domains || [], 'removeInterceptDomain');
-  renderDomains('smartInterceptDomains', config.smart_intercept_domains || [], 'removeSmartDomain');
+  renderDomains('interceptDomains', config.intercept_domains, 'removeInterceptDomain');
+  renderDomains('smartInterceptDomains', config.smart_intercept_domains, 'removeSmartDomain');
 
   // 预览
   document.getElementById('configPreview').textContent = JSON.stringify(config, null, 2);
 }
 
-function renderMappings(mappings) {
-  const list = document.getElementById('mappingList');
+function renderModels(models) {
+  const list = document.getElementById('modelsList');
   list.innerHTML = '';
-  for (const [source, target] of Object.entries(mappings)) {
-    if (source === 'default') continue;
-    addMappingRow(source, target);
+  
+  // 表头
+  const header = document.createElement('div');
+  header.className = 'mapping-row';
+  header.style.gridTemplateColumns = '1fr 1fr 120px 100px 70px 80px 70px 60px 40px';
+  header.style.fontSize = '11px';
+  header.style.color = 'var(--text-secondary)';
+  header.style.marginBottom = '4px';
+  header.innerHTML =
+    '<span>模型ID</span>' +
+    '<span>目标模型</span>' +
+    '<span>显示名称</span>' +
+    '<span>上下文窗口</span>' +
+    '<span>最大输出</span>' +
+    '<span>思考</span>' +
+    '<span>思考级别</span>' +
+    '<span>视觉</span>' +
+    '<span></span>';
+  list.appendChild(header);
+  
+  for (const [id, cfg] of Object.entries(models || {})) {
+    addModelRow(id, cfg);
   }
 }
 
-function addMappingRow(source, target) {
-  const list = document.getElementById('mappingList');
+function addModelRow(id, cfg) {
+  const list = document.getElementById('modelsList');
   const div = document.createElement('div');
   div.className = 'mapping-row';
-  div.innerHTML = '<input type="text" class="map-source" value="' + esc(source) + '" placeholder="Copilot 模型名">' +
-    '<input type="text" class="map-target" value="' + esc(target) + '" placeholder="目标模型名">' +
-    '<button class="remove-btn" onclick="this.parentElement.remove()">✕</button>';
-  list.appendChild(div);
-}
-
-function addMapping() {
-  addMappingRow('', '');
-}
-
-function renderThinking(thinking) {
-  // 检查是否为统一格式（顶层有 enabled）
-  if (thinking.enabled !== undefined) {
-    document.getElementById('thinkingGlobalEnabled').checked = thinking.enabled;
-  } else {
-    document.getElementById('thinkingGlobalEnabled').checked = false;
-  }
-
-  const list = document.getElementById('thinkingList');
-  list.innerHTML = '';
-  for (const [model, tcfg] of Object.entries(thinking)) {
-    if (model === 'enabled' || model === 'default') continue;
-    addThinkingRow(model, tcfg.enabled, tcfg.effort);
-  }
-}
-
-function addThinkingRow(model, enabled, effort) {
-  const list = document.getElementById('thinkingList');
-  const div = document.createElement('div');
-  div.className = 'mapping-row';
-  div.style.gridTemplateColumns = '1fr 80px 100px 40px';
-  div.innerHTML = '<input type="text" class="think-model" value="' + esc(model || '') + '" placeholder="目标模型名">' +
-    '<select class="think-enabled" style="padding:6px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:13px">' +
-    '<option value="true"' + (enabled ? ' selected' : '') + '>开启</option>' +
-    '<option value="false"' + (!enabled ? ' selected' : '') + '>关闭</option></select>' +
-    '<select class="think-effort" style="padding:6px 10px;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:13px">' +
+  div.style.gridTemplateColumns = '1fr 1fr 120px 100px 70px 80px 70px 60px 40px';
+  cfg = cfg || {};
+  const effort = cfg.reasoning_effort || 'high';
+  div.innerHTML =
+    '<input type="text" class="model-id" value="' + esc(id) + '" placeholder="模型ID" style="min-width:80px">' +
+    '<input type="text" class="model-target" value="' + esc(cfg.target_model || '') + '" placeholder="目标模型" style="min-width:80px">' +
+    '<input type="text" class="model-name" value="' + esc(cfg.name || '') + '" placeholder="显示名称" style="min-width:80px">' +
+    '<input type="number" class="model-ctx" value="' + (cfg.context_window || '1048576') + '" placeholder="上下文" style="width:90px">' +
+    '<input type="number" class="model-output" value="' + (cfg.max_output_tokens || '64000') + '" placeholder="输出" style="width:60px">' +
+    '<label style="display:flex;align-items:center;gap:4px;font-size:12px"><input type="checkbox" class="model-thinking" ' + (cfg.thinking ? 'checked' : '') + '> 思考</label>' +
+    '<select class="model-effort" style="padding:4px 6px;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">' +
     '<option value="high"' + (effort === 'high' ? ' selected' : '') + '>high</option>' +
     '<option value="max"' + (effort === 'max' ? ' selected' : '') + '>max</option></select>' +
+    '<label style="display:flex;align-items:center;gap:4px;font-size:12px"><input type="checkbox" class="model-vision" ' + (cfg.vision ? 'checked' : '') + '> 视觉</label>' +
     '<button class="remove-btn" onclick="this.parentElement.remove()">✕</button>';
   list.appendChild(div);
 }
 
-function addThinking() {
-  addThinkingRow('', true, 'high');
+function addModel() {
+  addModelRow('', {});
 }
 
 function renderDomains(id, domains, removeFn) {
   const container = document.getElementById(id);
-  container.innerHTML = domains.map(d =>
+  if (!container) return;
+  const list = Array.isArray(domains) ? domains : [];
+  container.innerHTML = list.map(d =>
     '<span class="domain-tag">' + esc(d) + ' <span class="del" onclick="' + removeFn + "('" + esc(d) + "')" + '">✕</span></span>'
   ).join('');
 }
@@ -962,40 +935,28 @@ function collectConfig() {
   config.proxy.port = parseInt(document.getElementById('proxyPort').value) || 8080;
   config.log_level = document.getElementById('logLevel').value;
 
-  // context_window
-  const cwDefault = document.getElementById('contextWindowDefault').value.trim();
-  if (cwDefault) {
-    target.context_window = target.context_window || {};
-    target.context_window.default = parseInt(cwDefault);
-  }
-
-  // 模型映射
-  const mapping = { default: target.model_mapping?.default || 'deepseek-chat' };
-  document.querySelectorAll('.mapping-row').forEach(row => {
-    const inputs = row.querySelectorAll('input');
-    if (inputs.length >= 2) {
-      const src = inputs[0].value.trim();
-      const tgt = inputs[1].value.trim();
-      if (src && tgt) mapping[src] = tgt;
-    }
+  // ★ 模型定义（合并映射、思考、视觉等所有能力）
+  const models = {};
+  document.querySelectorAll('#modelsList .mapping-row').forEach(row => {
+    const id = row.querySelector('.model-id')?.value?.trim();
+    const targetModel = row.querySelector('.model-target')?.value?.trim();
+    if (!id || !targetModel) return;
+    models[id] = {
+      target_model: targetModel,
+      name: row.querySelector('.model-name')?.value?.trim() || id,
+      context_window: parseInt(row.querySelector('.model-ctx')?.value) || 1048576,
+      max_output_tokens: parseInt(row.querySelector('.model-output')?.value) || 64000,
+      thinking: row.querySelector('.model-thinking')?.checked || false,
+      reasoning_effort: row.querySelector('.model-effort')?.value || 'high',
+      vision: row.querySelector('.model-vision')?.checked || false,
+    };
   });
-  target.model_mapping = mapping;
+  target.models = models;
 
-  // 思考配置
-  const thinking = {};
-  const globalEnabled = document.getElementById('thinkingGlobalEnabled').checked;
-  if (globalEnabled) {
-    thinking.enabled = true;
-  }
-  document.querySelectorAll('#thinkingList .mapping-row').forEach(row => {
-    const model = row.querySelector('.think-model')?.value?.trim();
-    const enabled = row.querySelector('.think-enabled')?.value === 'true';
-    const effort = row.querySelector('.think-effort')?.value || 'high';
-    if (model) {
-      thinking[model] = { enabled, effort };
-    }
-  });
-  target.thinking = Object.keys(thinking).length > 0 ? thinking : { default: { enabled: false } };
+  // 清理旧格式字段
+  delete target.model_mapping;
+  delete target.thinking;
+  delete target.context_window;
 
   config.target = target;
   return config;
@@ -1009,9 +970,11 @@ async function saveConfig() {
   updates['target.type'] = config.target.type;
   updates['target.base_url'] = config.target.base_url;
   updates['target.api_key'] = config.target.api_key;
-  updates['target.model_mapping'] = config.target.model_mapping;
-  updates['target.thinking'] = config.target.thinking;
-  updates['target.context_window'] = config.target.context_window;
+  updates['target.models'] = config.target.models;
+  // 清除旧格式字段
+  updates['target.model_mapping'] = undefined;
+  updates['target.thinking'] = undefined;
+  updates['target.context_window'] = undefined;
   updates['proxy.host'] = config.proxy.host;
   updates['proxy.port'] = config.proxy.port;
   updates['log_level'] = config.log_level;
