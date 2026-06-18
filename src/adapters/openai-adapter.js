@@ -84,6 +84,7 @@ class OpenAIBackedAdapter {
 
   /**
    * 将源模型名映射到目标模型名
+   * 仅当配置中定义了该模型的映射时才映射，否则原样保留
    */
   mapModel(sourceModel) {
     // 新格式：从 models 中查找
@@ -95,8 +96,8 @@ class OpenAIBackedAdapter {
     if (this.modelMapping[sourceModel]) {
       return this.modelMapping[sourceModel];
     }
-    // 默认
-    return this.defaultModel;
+    // 未配置映射时，原样返回，不做默认映射
+    return sourceModel;
   }
 
   /**
@@ -340,6 +341,9 @@ class OpenAIBackedAdapter {
     try {
       requestBody = JSON.parse(body);
     } catch (e) {
+      logger.warn(`  ❌ JSON 解析失败: ${e.message}`);
+      logger.warn(`  body 前200字符: ${(body || '').substring(0, 200)}`);
+      logger.warn(`  body 长度: ${body ? body.length : 0}`);
       return this.errorResponse(400, 'Invalid JSON in request body');
     }
 
@@ -768,30 +772,6 @@ class OpenAIBackedAdapter {
       }
       req.end();
     });
-  }
-
-  mapModel(originalModel) {
-    if (!originalModel) return this.defaultModel;
-    
-    // 精确匹配
-    if (this.modelMapping[originalModel]) {
-      return this.modelMapping[originalModel];
-    }
-
-    // 正则匹配
-    for (const [pattern, target] of Object.entries(this.modelMapping)) {
-      if (pattern === 'default') continue;
-      try {
-        const regex = new RegExp(pattern, 'i');
-        if (regex.test(originalModel)) {
-          return target;
-        }
-      } catch (e) {
-        // 不是正则表达式，跳过
-      }
-    }
-
-    return this.defaultModel;
   }
 
   errorResponse(statusCode, message) {

@@ -50,7 +50,7 @@ class ProxyServer {
     server.listen(port, host, () => {
       logger.info('');
       logger.info('='.repeat(60));
-      logger.info('  ModelProxy v1.0.1');
+      logger.info('  ModelProxy v1.0.2');
       logger.info('='.repeat(60));
       logger.info(`  ✅ 代理服务器已启动: http://${host}:${port}`);
       logger.info('');
@@ -198,7 +198,7 @@ class ProxyServer {
         timestamp: new Date().toISOString(),
         intercept_domains: this.router.getInterceptDomains(),
         target: this.config.target.base_url,
-        version: '1.0.1',
+        version: '1.0.2',
       }));
       logger.info('[健康检查] 代理运行正常');
       return;
@@ -599,7 +599,7 @@ code { background:#eee; padding:2px 6px; border-radius:3px; font-size:13px; }
   <p>2. 或用命令行: <code>curl -x http://127.0.0.1:${this.config.proxy.port} https://api.openai.com/v1/models</code></p>
   <p>3. 查看日志文件: <code>type proxy.log</code> 或 <code>Get-Content proxy.log -Tail 20</code></p>
 </div>
-<div class="footer">ModelProxy v1.0.1 | ${new Date().toISOString()}</div>
+<div class="footer">ModelProxy v1.0.2 | ${new Date().toISOString()}</div>
 </body></html>`;
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -786,7 +786,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     <button class="btn btn-success" onclick="saveConfig()" style="padding:12px 40px;font-size:16px">💾 保存配置</button>
   </div>
 
-  <div class="footer-info">ModelProxy v1.0.1 — 修改配置后点击保存，配置立即生效，无需重启代理</div>
+  <div class="footer-info">ModelProxy v1.0.2 — 修改配置后点击保存，配置立即生效，无需重启代理</div>
 </div>
 
 <div class="toast" id="toast"></div>

@@ -535,7 +535,7 @@ class AnthropicAdapter {
   }
 
   mapModel(originalModel) {
-    if (!originalModel) return this.defaultModel;
+    if (!originalModel) return originalModel;
     // 新格式：从 models 中查找
     const modelConfig = this.getModelConfig(originalModel);
     if (modelConfig && modelConfig.target_model) return modelConfig.target_model;
@@ -549,7 +549,8 @@ class AnthropicAdapter {
         if (regex.test(originalModel)) return target;
       } catch (e) {}
     }
-    return this.defaultModel;
+    // 未配置映射时原样返回
+    return originalModel;
   }
 
   errorResponse(statusCode, message) {
