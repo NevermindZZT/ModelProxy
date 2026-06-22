@@ -61,7 +61,18 @@ function main() {
   printBanner();
 
   // 检查命令参数
-  const arg = process.argv[2];
+  const args = process.argv.slice(2);
+  
+  // 解析 --config <name>
+  const configIdx = args.indexOf('--config');
+  if (configIdx !== -1 && args[configIdx + 1]) {
+    const configName = args[configIdx + 1];
+    const { setConfigName, getConfigPath } = require('./paths');
+    setConfigName(configName);
+    logger.info(`使用配置文件: ${getConfigPath()}`);
+  }
+
+  const arg = args[0];
   if (arg === '--help' || arg === '-h') {
     printHelp();
     process.exit(0);
@@ -103,9 +114,10 @@ ${colors.bold}用法:${colors.reset}
   node src/index.js [选项]
 
 ${colors.bold}选项:${colors.reset}
-  -h, --help          显示帮助信息
-  -c, --install-cert  显示证书安装说明
-  -g, --gen-cert      仅生成 CA 证书（不启动代理）
+  -h, --help                   显示帮助信息
+  -c, --install-cert           显示证书安装说明
+  -g, --gen-cert               仅生成 CA 证书（不启动代理）
+  --config <名称>               使用指定的配置文件（如 config-deepseek.yaml）
   `);
 }
 

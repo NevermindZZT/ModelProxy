@@ -50,7 +50,7 @@ class ProxyServer {
     server.listen(port, host, () => {
       logger.info('');
       logger.info('='.repeat(60));
-      logger.info('  ModelProxy v1.0.2');
+      logger.info('  ModelProxy v1.0.3');
       logger.info('='.repeat(60));
       logger.info(`  ✅ 代理服务器已启动: http://${host}:${port}`);
       logger.info('');
@@ -185,6 +185,51 @@ class ProxyServer {
       return this._jsonResponse(res, 200, { success: true, message: '配置已从文件重新加载' });
     }
 
+    // === 列出可用配置文件 ===
+    if (url === '/_modelproxy/configs' && req.method === 'GET') {
+      const { getDataDir, getConfigName } = require('./paths');
+      const fs = require('fs');
+      const dir = getDataDir();
+      let files = [];
+      try {
+        files = fs.readdirSync(dir)
+          .filter(f => /^config-.+\.yaml$/.test(f) || f === 'config.yaml')
+          .map(f => {
+            const match = f.match(/^config(?:-(.+))?\.yaml$/);
+            return { file: f, name: match ? (match[1] || 'default') : f, isActive: false };
+          })
+          .sort((a, b) => a.name.localeCompare(b.name));
+        // 标记当前活动配置
+        const activeConfigName = getConfigName();
+        for (const f of files) {
+          f.isActive = (f.name === (activeConfigName || 'default'));
+        }
+        if (!files.find(f => f.name === 'default')) {
+          // 始终有一个默认配置选项
+          files.unshift({ file: 'config.yaml', name: 'default', isActive: activeConfigName === '' });
+        }
+      } catch (e) {
+        logger.error('[配置API] 列出配置文件失败:', e.message);
+      }
+      return this._jsonResponse(res, 200, { configs: files, active: getConfigName() || 'default' });
+    }
+
+    // === 切换配置文件 ===
+    if (url === '/_modelproxy/switch-config' && req.method === 'POST') {
+      try {
+        const body = await this._collectBody(req);
+        const data = JSON.parse(body);
+        const configName = data.config || '';
+        const { setConfigName, getConfigPath } = require('./paths');
+        setConfigName(configName);
+        this.configManager.load();
+        logger.info(`[配置API] 已切换到配置文件: ${getConfigPath()}`);
+        return this._jsonResponse(res, 200, { success: true, message: `已切换到: ${getConfigPath()}`, configPath: getConfigPath() });
+      } catch (err) {
+        return this._jsonResponse(res, 400, { success: false, message: err.message });
+      }
+    }
+
     // === 状态页面 ===
     if (url === '/' || url === '/_modelproxy/status') {
       return this.serveStatusPage(res);
@@ -198,7 +243,7 @@ class ProxyServer {
         timestamp: new Date().toISOString(),
         intercept_domains: this.router.getInterceptDomains(),
         target: this.config.target.base_url,
-        version: '1.0.2',
+        version: '1.0.3',
       }));
       logger.info('[健康检查] 代理运行正常');
       return;
@@ -599,7 +644,7 @@ code { background:#eee; padding:2px 6px; border-radius:3px; font-size:13px; }
   <p>2. 或用命令行: <code>curl -x http://127.0.0.1:${this.config.proxy.port} https://api.openai.com/v1/models</code></p>
   <p>3. 查看日志文件: <code>type proxy.log</code> 或 <code>Get-Content proxy.log -Tail 20</code></p>
 </div>
-<div class="footer">ModelProxy v1.0.2 | ${new Date().toISOString()}</div>
+<div class="footer">ModelProxy v1.0.3 | ${new Date().toISOString()}</div>
 </body></html>`;
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -771,6 +816,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
   <!-- 高级 -->
   <div class="panel" id="panel-advanced">
     <div class="card">
+      <h3>配置文件切换</h3>
+      <p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px">选择不同的配置文件可快速切换供应商。当前配置通过顶部「保存配置」按钮写入当前选中的文件。</p>
+      <div class="form-row" style="align-items:center">
+        <div class="form-group" style="flex:1">
+          <select id="configSelector" style="width:100%;padding:8px 12px;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px"></select>
+        </div>
+        <button class="btn btn-primary" onclick="switchConfig()" style="white-space:nowrap;margin-top:14px">🔄 切换</button>
+        <button class="btn btn-sm" onclick="refreshConfigList()" style="white-space:nowrap;margin-top:14px;background:var(--input-bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;cursor:pointer;font-size:13px">🔄 刷新列表</button>
+      </div>
+    </div>
+    <div class="card">
       <h3>操作</h3>
       <div class="btn-group">
         <button class="btn btn-danger" onclick="reloadConfig()">🔄 从文件重新加载</button>
@@ -786,7 +842,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     <button class="btn btn-success" onclick="saveConfig()" style="padding:12px 40px;font-size:16px">💾 保存配置</button>
   </div>
 
-  <div class="footer-info">ModelProxy v1.0.2 — 修改配置后点击保存，配置立即生效，无需重启代理</div>
+  <div class="footer-info">ModelProxy v1.0.3 — 修改配置后点击保存，配置立即生效，无需重启代理</div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -799,6 +855,7 @@ async function loadConfig() {
     const res = await fetch('/_modelproxy/config');
     config = await res.json();
     renderConfig();
+    refreshConfigList();
   } catch(e) {
     showToast('加载配置失败: ' + e.message, 'error');
   }
@@ -1010,6 +1067,46 @@ async function reloadConfig() {
     }
   } catch(e) {
     showToast('❌ 重载失败: ' + e.message, 'error');
+  }
+}
+
+async function refreshConfigList() {
+  try {
+    const res = await fetch('/_modelproxy/configs');
+    const data = await res.json();
+    const sel = document.getElementById('configSelector');
+    sel.innerHTML = '';
+    for (const cfg of (data.configs || [])) {
+      const opt = document.createElement('option');
+      opt.value = cfg.name;
+      opt.textContent = cfg.file + (cfg.isActive ? ' (当前)' : '');
+      if (cfg.isActive) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  } catch(e) {
+    showToast('❌ 加载配置列表失败: ' + e.message, 'error');
+  }
+}
+
+async function switchConfig() {
+  const sel = document.getElementById('configSelector');
+  const name = sel.value;
+  try {
+    const res = await fetch('/_modelproxy/switch-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: name === 'default' ? '' : name }),
+    });
+    const result = await res.json();
+    if (result.success) {
+      showToast('✅ 已切换到: ' + result.configPath, 'success');
+      await loadConfig();
+      await refreshConfigList();
+    } else {
+      showToast('❌ ' + result.message, 'error');
+    }
+  } catch(e) {
+    showToast('❌ 切换失败: ' + e.message, 'error');
   }
 }
 

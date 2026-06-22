@@ -636,12 +636,14 @@ class OpenAIBackedAdapter {
    */
   _fetchRealModels(hostname, method, pathname, headers, apiKey) {
     return new Promise((resolve, reject) => {
-      // ★ 从目标供应商（targetBaseUrl）获取模型列表，而非从请求域名
-      // 例如：用户配置 OpenRouter 为提供商，但目标是 DeepSeek
-      // 模型列表应从 DeepSeek 的 /v1/models 获取
+      // ★ 从目标供应商（targetBaseUrl）获取模型列表
       const parsedUrl = new URL(this.targetBaseUrl);
       const targetHost = parsedUrl.hostname;
-      const targetPath = '/v1/models'; // 目标供应商的标准路径
+      // 使用 base_url 的路径前缀 + /v1/models
+      // 例如：https://opencode.ai/zen/go → /zen/go/v1/models
+      // 例如：https://api.deepseek.com → /v1/models
+      const basePath = parsedUrl.pathname.replace(/\/+$/, ''); // 去掉末尾斜杠
+      const targetPath = basePath + '/v1/models';
 
       const lib = https;
       const options = {

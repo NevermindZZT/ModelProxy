@@ -11,24 +11,64 @@
 const path = require('path');
 const fs = require('fs');
 
+// 当前活动的配置名称，空字符串表示使用默认 config.yaml
+let _configName = '';
+
 /**
  * 获取运行时数据目录
- * - pkg 打包后: exe 所在目录
- * - 开发模式: 项目根目录（__dirname 的上级）
  */
 function getDataDir() {
   if (process.pkg) {
     return path.dirname(process.execPath);
   }
-  // 开发模式: src/ 的上级
   return path.resolve(__dirname, '..');
 }
 
 /**
- * 获取配置文件路径 (config.yaml)
+ * 获取活动配置持久化文件路径
  */
-function getConfigPath() {
-  return path.join(getDataDir(), 'config.yaml');
+function _getActiveConfigPath() {
+  return path.join(getDataDir(), '.active-config');
+}
+
+/**
+ * 初始化时从持久化文件恢复配置名称
+ */
+function _initConfigName() {
+  try {
+    if (fs.existsSync(_getActiveConfigPath())) {
+      const saved = fs.readFileSync(_getActiveConfigPath(), 'utf-8').trim();
+      if (saved) _configName = saved;
+    }
+  } catch (e) {}
+}
+_initConfigName(); // 模块加载时立即恢复
+
+/**
+ * 设置活动配置名称并持久化
+ */
+function setConfigName(name) {
+  _configName = name || '';
+  try {
+    fs.writeFileSync(_getActiveConfigPath(), _configName, 'utf-8');
+  } catch (e) {}
+}
+
+/**
+ * 获取活动配置名称
+ */
+function getConfigName() {
+  return _configName;
+}
+
+/**
+ * 获取配置文件路径
+ * @param {string} [name] - 配置名称，不传则使用当前活动的配置名称
+ */
+function getConfigPath(name) {
+  const configName = name !== undefined ? name : _configName;
+  const fileName = configName ? `config-${configName}.yaml` : 'config.yaml';
+  return path.join(getDataDir(), fileName);
 }
 
 /**
@@ -58,6 +98,8 @@ function ensureDir(dirPath) {
 module.exports = {
   getDataDir,
   getConfigPath,
+  getConfigName,
+  setConfigName,
   getLogPath,
   getCertsDir,
   ensureDir,

@@ -10,3 +10,4 @@ sea-config.json
 .vscode/
 .codegraph
 .reasonix
+.active-config
