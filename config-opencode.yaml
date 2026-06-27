@@ -6,35 +6,19 @@ target:
   base_url: "https://opencode.ai/zen/go"
   api_key: ""
   models:
-    gpt-5.4:
-      target_model: deepseek-v4-flash
-      name: GPT-5.4
-      context_window: 1048576
-      max_output_tokens: 64000
-      thinking: true
-      reasoning_effort: high
-      vision: false
-    gpt-5.5:
+    deepseek-v4-pro:
       target_model: deepseek-v4-pro
-      name: GPT-5.5
+      name: deepseek-v4-pro
       context_window: 1048576
-      max_output_tokens: 64000
+      max_output_tokens: 393216
       thinking: true
       reasoning_effort: high
       vision: false
-    claude-opus-4.7:
+    deepseek-v4-flash:
       target_model: deepseek-v4-flash
-      name: "Claude Opus 4.7"
+      name: deepseek-v4-flash
       context_window: 1048576
-      max_output_tokens: 64000
-      thinking: true
-      reasoning_effort: high
-      vision: false
-    claude-opus-4.8:
-      target_model: deepseek-v4-pro
-      name: "Claude Opus 4.8"
-      context_window: 1048576
-      max_output_tokens: 64000
+      max_output_tokens: 393216
       thinking: true
       reasoning_effort: high
       vision: false

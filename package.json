@@ -1,6 +1,6 @@
 {
   "name": "model-proxy",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "AI 模型 API 代理 - 将 Android Studio GitHub Copilot 请求转发到第三方模型供应商",
   "main": "src/index.js",
   "bin": "src/index.js",

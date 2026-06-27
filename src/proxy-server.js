@@ -53,7 +53,7 @@ class ProxyServer {
     server.listen(port, host, () => {
       logger.info('');
       logger.info('='.repeat(60));
-      logger.info('  ModelProxy v1.0.4');
+      logger.info('  ModelProxy v1.0.5');
       logger.info('='.repeat(60));
       logger.info(`  ✅ 代理服务器已启动: http://${host}:${port}`);
       logger.info('');
@@ -246,7 +246,7 @@ class ProxyServer {
         timestamp: new Date().toISOString(),
         intercept_domains: this.router.getInterceptDomains(),
         target: this.config.target.base_url,
-        version: '1.0.4',
+        version: '1.0.5',
       }));
       logger.info('[健康检查] 代理运行正常');
       return;
@@ -256,6 +256,17 @@ class ProxyServer {
     if (url === '/_modelproxy/stats/tokens') {
       const stats = this.tokenTracker.getStats();
       return this._jsonResponse(res, 200, stats);
+    }
+
+    // === 模型列表（管理面板用） ===
+    if (url === '/_modelproxy/models') {
+      try {
+        const models = await this.router.getModelsForAdmin();
+        return this._jsonResponse(res, 200, models);
+      } catch (err) {
+        logger.error('[模型列表] 获取失败: ' + err.message);
+        return this._jsonResponse(res, 500, { error: err.message });
+      }
     }
 
     // === 普通 HTTP 代理请求 ===
@@ -461,6 +472,14 @@ class ProxyServer {
    * 对于智能拦截域名，先检测是否为 LLM 请求，否则透传到原始服务器
    */
   async _handleRequest(tlsSocket, method, hostname, pathname, headers, body) {
+    // ★ 先检查是否有适配器能处理此请求
+    // 如果没有任何适配器能处理，透传到原始服务器（而不是返回 502）
+    if (!this.router.canHandleRequest(method, pathname)) {
+      logger.info(`➡️  [透传] 适配器无法处理，转发到原始服务器: ${method} ${pathname}`);
+      this.forwardToOriginalServer(tlsSocket, method, hostname, pathname, headers, body);
+      return;
+    }
+
     // ★ 智能拦截域名：检测是否为 LLM 请求
     if (this.router.isSmartInterceptDomain(hostname)) {
       if (RequestRouter.isLLMRequest(method, pathname, headers, body)) {
@@ -473,7 +492,7 @@ class ProxyServer {
       return;
     }
 
-    // ★ 直接拦截域名：始终通过适配器处理
+    // ★ 直接拦截域名：通过适配器处理
     await this._routeAndRespond(tlsSocket, method, hostname, pathname, headers, body);
   }
 
@@ -683,7 +702,7 @@ code { background:#eee; padding:2px 6px; border-radius:3px; font-size:13px; }
   <p>2. 或用命令行: <code>curl -x http://127.0.0.1:${this.config.proxy.port} https://api.openai.com/v1/models</code></p>
   <p>3. 查看日志文件: <code>type proxy.log</code> 或 <code>Get-Content proxy.log -Tail 20</code></p>
 </div>
-<div class="footer">ModelProxy v1.0.4 | ${new Date().toISOString()}</div>
+<div class="footer">ModelProxy v1.0.5 | ${new Date().toISOString()}</div>
 </body></html>`;
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -799,7 +818,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
       </div>
       <div class="form-group">
         <label>API 基础地址 (Base URL)</label>
-        <input type="url" id="targetBaseUrl" placeholder="https://api.deepseek.com">
+        <input type="url" id="targetBaseUrl" placeholder="https://api.example.com">
       </div>
       <div class="form-group">
         <label>API Key（可选，留空则使用请求中的 Authorization 头）</label>
@@ -951,7 +970,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     <button class="btn btn-success" onclick="saveConfig()" style="padding:12px 40px;font-size:16px">💾 保存配置</button>
   </div>
 
-  <div class="footer-info">ModelProxy v1.0.4 — 修改配置后点击保存，配置立即生效，无需重启代理</div>
+  <div class="footer-info">ModelProxy v1.0.5 — 修改配置后点击保存，配置立即生效，无需重启代理</div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -993,6 +1012,8 @@ function renderConfig() {
   document.getElementById('configPreview').textContent = JSON.stringify(config, null, 2);
 }
 
+var nativeModelList = [];
+
 function renderModels(models) {
   const list = document.getElementById('modelsList');
   list.innerHTML = '';
@@ -1016,35 +1037,79 @@ function renderModels(models) {
     '<span></span>';
   list.appendChild(header);
   
+  // 构建原生模型 ID 集合（用于判断模型中哪些是上游原生模型）
+  var nativeIds = {};
+  for (var i = 0; i < nativeModelList.length; i++) {
+    nativeIds[nativeModelList[i].id] = nativeModelList[i];
+  }
+  
+  // 先渲染配置中已有的模型
+  var configuredIds = {};
   for (const [id, cfg] of Object.entries(models || {})) {
-    addModelRow(id, cfg);
+    configuredIds[id] = true;
+    // 自映射 (target_model === id) 且在原生列表中的，按原生模型显示
+    var isNativeModel = (cfg.target_model === id) && nativeIds[id];
+    addModelRow(id, cfg, !!isNativeModel);
+  }
+  
+  // 再渲染上游原生模型（尚未在配置中的）
+  for (var i = 0; i < nativeModelList.length; i++) {
+    var m = nativeModelList[i];
+    if (!configuredIds[m.id]) {
+      addModelRow(m.id, {
+        target_model: m.id,
+        name: m.name || m.id,
+        context_window: m.context_window || 1048576,
+        max_output_tokens: m.max_output_tokens || 64000,
+        vision: m.vision === true,
+        _isNative: true,
+      }, true);
+    }
   }
 }
 
-function addModelRow(id, cfg) {
+function addModelRow(id, cfg, isNative) {
   const list = document.getElementById('modelsList');
   const div = document.createElement('div');
   div.className = 'mapping-row';
   div.style.gridTemplateColumns = '1fr 1fr 120px 100px 70px 80px 70px 60px 40px';
   cfg = cfg || {};
   const effort = cfg.reasoning_effort || 'high';
+  var nativeStyle = isNative ? 'opacity:0.7;' : '';
+  var nativeAttrs = isNative ? ' readonly title="上游原生模型"' : '';
+  
   div.innerHTML =
-    '<input type="text" class="model-id" value="' + esc(id) + '" placeholder="模型ID" style="min-width:80px">' +
-    '<input type="text" class="model-target" value="' + esc(cfg.target_model || '') + '" placeholder="目标模型" style="min-width:80px">' +
-    '<input type="text" class="model-name" value="' + esc(cfg.name || '') + '" placeholder="显示名称" style="min-width:80px">' +
+    '<input type="text" class="model-id" value="' + esc(id) + '" placeholder="模型ID" style="min-width:80px;' + nativeStyle + '"' + nativeAttrs + '>' +
+    '<input type="text" class="model-target" value="' + esc(cfg.target_model || id) + '" placeholder="目标模型" style="min-width:80px;' + nativeStyle + '"' + nativeAttrs + '>' +
+    '<input type="text" class="model-name" value="' + esc(cfg.name || id) + '" placeholder="显示名称" style="min-width:80px;' + nativeStyle + '"' + (isNative ? nativeAttrs : '') + '>' +
     '<input type="number" class="model-ctx" value="' + (cfg.context_window || '1048576') + '" placeholder="上下文" style="width:90px">' +
     '<input type="number" class="model-output" value="' + (cfg.max_output_tokens || '64000') + '" placeholder="输出" style="width:60px">' +
     '<label style="display:flex;align-items:center;gap:4px;font-size:12px"><input type="checkbox" class="model-thinking" ' + (cfg.thinking ? 'checked' : '') + '> 思考</label>' +
     '<select class="model-effort" style="padding:4px 6px;background:var(--input-bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:11px">' +
+    '<option value="low"' + (effort === 'low' ? ' selected' : '') + '>low</option>' +
+    '<option value="medium"' + (effort === 'medium' ? ' selected' : '') + '>medium</option>' +
     '<option value="high"' + (effort === 'high' ? ' selected' : '') + '>high</option>' +
     '<option value="max"' + (effort === 'max' ? ' selected' : '') + '>max</option></select>' +
     '<label style="display:flex;align-items:center;gap:4px;font-size:12px"><input type="checkbox" class="model-vision" ' + (cfg.vision ? 'checked' : '') + '> 视觉</label>' +
-    '<button class="remove-btn" onclick="this.parentElement.remove()">✕</button>';
+    (isNative ? '<span style="font-size:10px;color:var(--text-secondary);padding:4px">原生</span>' : '<button class="remove-btn" onclick="this.parentElement.remove()">✕</button>');
   list.appendChild(div);
 }
 
 function addModel() {
-  addModelRow('', {});
+  addModelRow('', {}, false);
+}
+
+async function loadNativeModels() {
+  try {
+    const res = await fetch('/_modelproxy/models');
+    const data = await res.json();
+    nativeModelList = (data.native || []).concat(data.custom || []);
+    // 重新渲染模型列表（保留用户已修改的配置）
+    renderModels(config.target && config.target.models ? config.target.models : {});
+  } catch(e) {
+    // 静默失败，不影响面板其他功能
+    console.warn('加载上游模型列表失败:', e.message);
+  }
 }
 
 function renderDomains(id, domains, removeFn) {
@@ -1107,14 +1172,18 @@ function collectConfig() {
     const id = row.querySelector('.model-id')?.value?.trim();
     const targetModel = row.querySelector('.model-target')?.value?.trim();
     if (!id || !targetModel) return;
+    const thinking = row.querySelector('.model-thinking')?.checked || false;
+    const vision = row.querySelector('.model-vision')?.checked || false;
+    // 原生模型（target_model === id 表示自映射）没有自定义能力时不保存
+    if (targetModel === id && !thinking && !vision) return;
     models[id] = {
       target_model: targetModel,
       name: row.querySelector('.model-name')?.value?.trim() || id,
       context_window: parseInt(row.querySelector('.model-ctx')?.value) || 1048576,
       max_output_tokens: parseInt(row.querySelector('.model-output')?.value) || 64000,
-      thinking: row.querySelector('.model-thinking')?.checked || false,
+      thinking: thinking,
       reasoning_effort: row.querySelector('.model-effort')?.value || 'high',
-      vision: row.querySelector('.model-vision')?.checked || false,
+      vision: vision,
     };
   });
   target.models = models;
@@ -1243,6 +1312,10 @@ document.querySelectorAll('.tab').forEach(tab => {
     if (tab.dataset.tab === 'tokens') {
       loadTokenStats();
     }
+    // 模型定义 tab 被点击时加载原生模型列表
+    if (tab.dataset.tab === 'models') {
+      loadNativeModels();
+    }
   });
 });
 
@@ -1357,7 +1430,13 @@ function renderTokenStats(stats) {
 }
 
 // 加载配置
-loadConfig();
+loadConfig().then(function() {
+  // 配置加载完成后，预加载原生模型列表
+  loadNativeModels();
+}).catch(function() {
+  // 配置加载失败也尝试加载原生模型
+  setTimeout(loadNativeModels, 1000);
+});
 </script>
 </body>
 </html>`;

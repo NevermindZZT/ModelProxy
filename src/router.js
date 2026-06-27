@@ -148,6 +148,81 @@ class RequestRouter {
   }
 
   /**
+   * 检查是否有适配器能处理此请求
+   * 用于 _handleRequest 判断是否需要透传
+   */
+  canHandleRequest(method, pathname) {
+    return this.openaiAdapter.canHandle(method, pathname) || 
+           this.anthropicAdapter.canHandle(method, pathname);
+  }
+
+  /**
+   * 获取模型列表供管理面板使用
+   * 从上游 API 获取原始模型 + 合并配置中自定义的模型
+   * @returns {Promise<{native:Array, custom:Array}>}
+   */
+  async getModelsForAdmin() {
+    var nativeModels = [];
+    var customModels = [];
+
+    // 从配置中获取自定义模型
+    var configModels = this._config.target && this._config.target.models;
+    if (configModels) {
+      customModels = Object.entries(configModels).map(function(e) {
+        var id = e[0], cfg = e[1];
+        return {
+          id: id,
+          isNative: false,
+          target_model: cfg.target_model || id,
+          name: cfg.name || id,
+          context_window: cfg.context_window || null,
+          max_output_tokens: cfg.max_output_tokens || null,
+          thinking: cfg.thinking || false,
+          reasoning_effort: cfg.reasoning_effort || 'high',
+          vision: cfg.vision || false,
+        };
+      });
+    }
+
+    // 从上游获取原生模型列表
+    try {
+      var apiKey = (this._config.target && this._config.target.api_key) || '';
+      nativeModels = await this.openaiAdapter._fetchRealModels('', 'GET', '/v1/models', {}, apiKey);
+      // 记录上游返回的模型字段（首个模型），用于调试不同供应商的返回格式
+      if (nativeModels.length > 0) {
+        var firstKeys = Object.keys(nativeModels[0]).join(', ');
+        logger.info('[Admin] 上游模型字段: ' + firstKeys + ' (共 ' + nativeModels.length + ' 个模型)');
+      }
+      // 标记是否已有自定义配置
+      var customIds = {};
+      customModels.forEach(function(m) { customIds[m.id] = true; });
+      nativeModels = nativeModels.map(function(m) {
+        var id = m.id || '';
+        // 不同供应商用不同字段名表示上下文窗口
+        var ctx = m.context_length || m.max_input_tokens || m.context_window || null;
+        var maxOut = m.max_output_tokens || m.max_completion_tokens || null;
+        // 视觉能力：不同供应商的字段名不同
+        var hasVision = (m.vision === true || m.supports_vision === true || 
+                        (m.architecture && m.architecture.modality === 'text+image->text') ||
+                        (m.capabilities && m.capabilities.vision === true));
+        return {
+          id: id,
+          isNative: true,
+          hasConfig: !!customIds[id],
+          name: m.name || m.id || id,
+          context_window: ctx,
+          max_output_tokens: maxOut,
+          vision: hasVision,
+        };
+      }, this);
+    } catch (e) {
+      logger.warn('[Router] 获取上游模型列表失败: ' + e.message);
+    }
+
+    return { native: nativeModels, custom: customModels };
+  }
+
+  /**
    * 路由并处理已拦截的请求
    */
   async routeIntercepted(method, hostname, pathname, headers, body) {

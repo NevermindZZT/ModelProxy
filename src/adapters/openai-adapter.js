@@ -71,6 +71,14 @@ class OpenAIBackedAdapter {
   }
 
   /**
+   * 获取默认 thinking 配置（对所有未显式配置的模型生效）
+   * 配置格式: { enabled: true, effort: "high" }
+   */
+  get defaultThinking() {
+    return this._targetConfig.default_thinking || null;
+  }
+
+  /**
    * 获取模型的完整配置
    * 优先从新格式 models 中查找，兼容旧格式 model_mapping + context_window + thinking
    */
@@ -142,6 +150,11 @@ class OpenAIBackedAdapter {
         return raw;
       }
       return raw[targetModel] || raw.default || null;
+    }
+    // 回退到全局 default_thinking 配置
+    const dt = this.defaultThinking;
+    if (dt && dt.enabled) {
+      return { enabled: true, effort: dt.effort || 'high' };
     }
     return null;
   }
@@ -353,6 +366,9 @@ class OpenAIBackedAdapter {
     requestBody.model = targetModel;
     
     logger.info(`  模型映射: ${originalModel} → ${targetModel}`);
+    // 打印请求体中的顶层字段名（不含 messages 内容），便于排查上游不支持的参数
+    var bodyKeys = Object.keys(requestBody).filter(function(k) { return k !== 'messages'; });
+    logger.info('  请求字段: ' + bodyKeys.join(', '));
 
     // 注入 thinking/reasoning 参数（按目标模型名配置，如果请求本身已携带则不覆盖）
     const modelThinking = this.getThinkingConfigForTarget(targetModel);
@@ -534,6 +550,15 @@ class OpenAIBackedAdapter {
       const cw = this.getContextWindow(id) || (config && config.context_window) || this.defaultContextWindow;
       const maxOutput = (config && config.max_output_tokens) || 64000;
       const supportsVision = (config && config.vision === true);
+      const supportsThinking = (config && config.thinking === true) || 
+        (!config && this.defaultThinking && this.defaultThinking.enabled === true);
+      
+      const nativeSupportedParams = [
+        'max_tokens', 'temperature', 'top_p', 'stop',
+        'frequency_penalty', 'presence_penalty',
+        'tool_choice', 'tools', 'top_k',
+      ];
+      if (supportsThinking) nativeSupportedParams.push('reasoning', 'include_reasoning');
       
       openRouterModels.push({
         id: id,
@@ -555,11 +580,7 @@ class OpenAIBackedAdapter {
           is_moderated: false,
         },
         per_request_limits: null,
-        supported_parameters: [
-          'max_tokens', 'temperature', 'top_p', 'stop',
-          'frequency_penalty', 'presence_penalty',
-          'tool_choice', 'tools', 'top_k',
-        ],
+        supported_parameters: nativeSupportedParams,
         default_parameters: {},
         supported_voices: null,
         knowledge_cutoff: null,
@@ -677,7 +698,8 @@ class OpenAIBackedAdapter {
             
             const obj = JSON.parse(rawBody);
             const data = obj.data || [];
-            logger.info(`  [Models] 从 ${targetHost} 获取到 ${data.length} 个原始模型`);
+            var modelIds = data.slice(0, 10).map(function(m) { return m.id || m.name || '?'; });
+            logger.info(`  [Models] 从 ${targetHost} 获取到 ${data.length} 个原始模型 (前10: ${modelIds.join(', ')})`);
             return resolve(data);
           } catch (e) {
             reject(new Error(`解析响应失败: ${e.message}`));
@@ -727,12 +749,17 @@ class OpenAIBackedAdapter {
           const responseBody = Buffer.concat(chunks).toString('utf-8');
           
           logger.debug(`  目标响应状态: ${res.statusCode}`);
-          // 检查 DeepSeek 响应中是否包含 reasoning_content
+          // 检查响应中是否包含 thinking 特征字段
           if (responseBody.includes('reasoning_content')) {
-            logger.info('  ✅ DeepSeek 响应中包含 reasoning_content（thinking 已生效）');
+            logger.info('  ✅ 上游响应中包含 reasoning_content（thinking 已生效）');
           } else if (res.statusCode >= 400) {
-            // 如果是错误响应，打印前 500 字符帮助排查
-            logger.warn(`  ❌ DeepSeek 返回错误 (${res.statusCode}): ${responseBody.substring(0, 500)}`);
+            // 如果是错误响应，打印请求体和响应帮助排查
+            var reqSnippet = body ? body.substring(0, 300) : '空';
+            logger.warn(`  ❌ 上游返回错误 (${res.statusCode})`);
+            logger.warn(`  请求 URL: ${options.hostname}${options.path}`);
+            logger.warn(`  响应类型: ${res.headers['content-type'] || '?'}`);
+            logger.warn(`  请求体(前300字符): ${reqSnippet}...`);
+            logger.warn(`  响应体: ${responseBody.substring(0, 500)}`);
           }
 
           // 过滤响应头，移除传输相关头
