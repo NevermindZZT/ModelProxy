@@ -5,6 +5,8 @@ const tls = require('tls');
 const logger = require('./logger');
 const { getOrCreateRootCA, generateCertForDomain } = require('./cert-manager');
 const RequestRouter = require('./router');
+const TokenTracker = require('./token-tracker');
+const { getDataDir } = require('./paths');
 
 class ProxyServer {
   constructor(configManager) {
@@ -13,6 +15,7 @@ class ProxyServer {
     this.rootCA = null;
     this.recentRequests = []; // 保存最近的请求记录用于状态页展示
     this.startTime = new Date();
+    this.tokenTracker = new TokenTracker(getDataDir());
   }
 
   /**
@@ -50,7 +53,7 @@ class ProxyServer {
     server.listen(port, host, () => {
       logger.info('');
       logger.info('='.repeat(60));
-      logger.info('  ModelProxy v1.0.3');
+      logger.info('  ModelProxy v1.0.4');
       logger.info('='.repeat(60));
       logger.info(`  ✅ 代理服务器已启动: http://${host}:${port}`);
       logger.info('');
@@ -243,10 +246,16 @@ class ProxyServer {
         timestamp: new Date().toISOString(),
         intercept_domains: this.router.getInterceptDomains(),
         target: this.config.target.base_url,
-        version: '1.0.3',
+        version: '1.0.4',
       }));
       logger.info('[健康检查] 代理运行正常');
       return;
+    }
+
+    // === Token 用量统计 ===
+    if (url === '/_modelproxy/stats/tokens') {
+      const stats = this.tokenTracker.getStats();
+      return this._jsonResponse(res, 200, stats);
     }
 
     // === 普通 HTTP 代理请求 ===
@@ -477,6 +486,36 @@ class ProxyServer {
         method, hostname, pathname, headers, body
       );
 
+      // ★ Token 用量追踪：从请求和响应中提取 usage 并记录
+      try {
+        if (TokenTracker.isLLMInferencePath(pathname) && response.statusCode === 200) {
+          const usage = TokenTracker.extractUsage(body, response.body, response.headers);
+          if (usage && (usage.promptTokens > 0 || usage.completionTokens > 0)) {
+            const model = TokenTracker.extractModel(body) || 'unknown';
+            // 查找目标模型名（从响应 body 中获取 model，或从请求中推断）
+            let targetModel = '';
+            try {
+              const respObj = JSON.parse(response.body);
+              targetModel = respObj.model || '';
+            } catch (e) { /* ignore */ }
+
+            this.tokenTracker.record({
+              model,
+              targetModel,
+              promptTokens: usage.promptTokens,
+              completionTokens: usage.completionTokens,
+              totalTokens: usage.totalTokens,
+              cacheHitTokens: usage.cacheHitTokens || 0,
+              host: hostname,
+            });
+            var cacheInfo = usage.cacheHitTokens ? ' (缓存命中 ' + usage.cacheHitTokens + ')' : '';
+            logger.info('  \uD83D\uDCCA Token 用量: prompt=' + usage.promptTokens + ' + completion=' + usage.completionTokens + ' = ' + usage.totalTokens + cacheInfo + ' (' + model + ')');
+          }
+        }
+      } catch (e) {
+        logger.debug(`  [TokenTracker] 记录失败: ${e.message}`);
+      }
+
       // 构建 HTTP 响应
       let responseHeaders = `HTTP/1.1 ${response.statusCode} ${this.getStatusText(response.statusCode)}\r\n`;
       for (const [key, value] of Object.entries(response.headers || {})) {
@@ -644,7 +683,7 @@ code { background:#eee; padding:2px 6px; border-radius:3px; font-size:13px; }
   <p>2. 或用命令行: <code>curl -x http://127.0.0.1:${this.config.proxy.port} https://api.openai.com/v1/models</code></p>
   <p>3. 查看日志文件: <code>type proxy.log</code> 或 <code>Get-Content proxy.log -Tail 20</code></p>
 </div>
-<div class="footer">ModelProxy v1.0.3 | ${new Date().toISOString()}</div>
+<div class="footer">ModelProxy v1.0.4 | ${new Date().toISOString()}</div>
 </body></html>`;
 
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -720,6 +759,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 .status-dot.ok { background: var(--success); }
 .status-dot.err { background: var(--danger); }
 .footer-info { font-size: 12px; color: var(--text-secondary); text-align: center; padding: 20px 0; }
+/* Token 统计表格对齐 */
+.stats-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+.stats-table th, .stats-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); word-wrap: break-word; overflow-wrap: break-word; }
+.stats-table th { background: var(--card); font-weight: 600; color: var(--text-secondary); font-size: 12px; text-transform: uppercase; letter-spacing: .3px; position: sticky; top: 0; z-index: 1; }
+.stats-table td code { font-size: 12px; background: var(--input-bg); padding: 1px 6px; border-radius: 3px; }
+.stats-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.stats-table .bar-cell { width: 25%; min-width: 100px; }
 .checkbox-group { display: flex; align-items: center; gap: 8px; }
 .checkbox-group input[type="checkbox"] { width: auto; }
 </style>
@@ -736,6 +782,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     <button class="tab active" data-tab="target">目标供应商</button>
     <button class="tab" data-tab="models">模型定义</button>
     <button class="tab" data-tab="domains">拦截域名</button>
+    <button class="tab" data-tab="tokens">Token 统计</button>
     <button class="tab" data-tab="advanced">高级</button>
   </div>
 
@@ -838,11 +885,73 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
     </div>
   </div>
 
+  <!-- Token 统计 -->
+  <div class="panel" id="panel-tokens">
+    <div class="card">
+      <h3>用量概览</h3>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px" id="statsSummary">
+        <div class="stat-card" data-period="today" style="background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
+          <div style="font-size:12px;color:var(--text-secondary)">今日</div>
+          <div class="stat-value" style="font-size:22px;font-weight:700;margin:6px 0">-</div>
+          <div style="font-size:11px;color:var(--text-secondary)"><span class="stat-prompt">-</span> prompt · <span class="stat-completion">-</span> completion<span class="stat-cache" style="display:none"> · <span class="stat-cache-val">-</span> \u7F13\u5B58</span></div>
+        </div>
+        <div class="stat-card" data-period="week" style="background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
+          <div style="font-size:12px;color:var(--text-secondary)">本周</div>
+          <div class="stat-value" style="font-size:22px;font-weight:700;margin:6px 0">-</div>
+          <div style="font-size:11px;color:var(--text-secondary)"><span class="stat-prompt">-</span> prompt · <span class="stat-completion">-</span> completion<span class="stat-cache" style="display:none"> · <span class="stat-cache-val">-</span> \u7F13\u5B58</span></div>
+        </div>
+        <div class="stat-card" data-period="month" style="background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
+          <div style="font-size:12px;color:var(--text-secondary)">本月</div>
+          <div class="stat-value" style="font-size:22px;font-weight:700;margin:6px 0">-</div>
+          <div style="font-size:11px;color:var(--text-secondary)"><span class="stat-prompt">-</span> prompt · <span class="stat-completion">-</span> completion<span class="stat-cache" style="display:none"> · <span class="stat-cache-val">-</span> \u7F13\u5B58</span></div>
+        </div>
+        <div class="stat-card" data-period="all" style="background:var(--input-bg);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center">
+          <div style="font-size:12px;color:var(--text-secondary)">全部</div>
+          <div class="stat-value" style="font-size:22px;font-weight:700;margin:6px 0">-</div>
+          <div style="font-size:11px;color:var(--text-secondary)"><span class="stat-prompt">-</span> prompt · <span class="stat-completion">-</span> completion<span class="stat-cache" style="display:none"> · <span class="stat-cache-val">-</span> \u7F13\u5B58</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>按模型统计（全部）</h3>
+      <div style="overflow-x:auto">
+        <table class="stats-table" id="modelStatsTable">
+          <colgroup><col style="width:22%"><col style="width:10%"><col style="width:18%"><col style="width:18%"><col style="width:12%"><col style="width:20%"></colgroup>
+          <thead><tr><th>\u6A21\u578B</th><th class="num">\u8BF7\u6C42\u6570</th><th class="num">Prompt</th><th class="num">Completion</th><th class="num">\u7F13\u5B58\u547D\u4E2D</th><th class="num">Total</th></tr></thead>
+          <tbody id="modelStatsBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>\u6BCF\u65E5\u660E\u7EC6</h3>
+      <div style="overflow-x:auto">
+        <table class="stats-table" id="dailyStatsTable">
+          <colgroup><col style="width:14%"><col style="width:10%"><col style="width:16%"><col style="width:16%"><col style="width:12%"><col style="width:12%"><col style="width:20%"></colgroup>
+          <thead><tr><th>\u65E5\u671F</th><th class="num">\u8BF7\u6C42\u6570</th><th class="num">Prompt</th><th class="num">Completion</th><th class="num">\u7F13\u5B58\u547D\u4E2D</th><th class="num">Total</th><th>\u8D8B\u52BF</th></tr></thead>
+          <tbody id="dailyStatsBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>\u6700\u8FD1\u8BF7\u6C42 <span style="font-weight:400;font-size:12px;color:var(--text-secondary)">\uFF08\u6700\u591A 100 \u6761\uFF09</span></h3>
+      <div style="overflow-x:auto">
+        <table class="stats-table" id="recentStatsTable">
+          <colgroup><col style="width:10%"><col style="width:18%"><col style="width:18%"><col style="width:12%"><col style="width:12%"><col style="width:10%"><col style="width:10%"><col style="width:10%"></colgroup>
+          <thead><tr><th>\u65F6\u95F4</th><th>\u6A21\u578B</th><th>\u76EE\u6807\u6A21\u578B</th><th class="num">Prompt</th><th class="num">Completion</th><th class="num">\u7F13\u5B58</th><th class="num">Total</th><th>\u6765\u6E90</th></tr></thead>
+          <tbody id="recentStatsBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div class="btn-group" style="justify-content:center;padding:8px 0 24px">
     <button class="btn btn-success" onclick="saveConfig()" style="padding:12px 40px;font-size:16px">💾 保存配置</button>
   </div>
 
-  <div class="footer-info">ModelProxy v1.0.3 — 修改配置后点击保存，配置立即生效，无需重启代理</div>
+  <div class="footer-info">ModelProxy v1.0.4 — 修改配置后点击保存，配置立即生效，无需重启代理</div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -1130,8 +1239,122 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById('panel-' + tab.dataset.tab).classList.add('active');
+    // Token 统计 tab 被点击时加载数据
+    if (tab.dataset.tab === 'tokens') {
+      loadTokenStats();
+    }
   });
 });
+
+// Token 统计
+async function loadTokenStats() {
+  try {
+    const res = await fetch('/_modelproxy/stats/tokens');
+    const stats = await res.json();
+    renderTokenStats(stats);
+  } catch(e) {
+    showToast('加载 Token 统计失败: ' + e.message, 'error');
+  }
+}
+
+function formatNumber(n) {
+  return (n || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function renderTokenStats(stats) {
+  // 概览卡片
+  var periods = [
+    { key: 'today', period: 'today' },
+    { key: 'thisWeek', period: 'week' },
+    { key: 'thisMonth', period: 'month' },
+    { key: 'allTime', period: 'all' },
+  ];
+  
+  for (var i = 0; i < periods.length; i++) {
+    var p = periods[i];
+    var data = stats[p.key] || {};
+    var card = document.querySelector('.stat-card[data-period="' + p.period + '"]');
+    if (!card) continue;
+    card.querySelector('.stat-value').textContent = formatNumber(data.totalTokens || 0);
+    card.querySelector('.stat-prompt').textContent = formatNumber(data.promptTokens || 0);
+    card.querySelector('.stat-completion').textContent = formatNumber(data.completionTokens || 0);
+    // 缓存命中（有数据才显示）
+    var cacheEl = card.querySelector('.stat-cache');
+    var cacheVal = card.querySelector('.stat-cache-val');
+    if (data.cacheHitTokens) {
+      cacheEl.style.display = 'inline';
+      cacheVal.textContent = formatNumber(data.cacheHitTokens);
+    } else {
+      cacheEl.style.display = 'none';
+    }
+  }
+
+  // 按模型统计（全部） — cols: 模型, 请求数, Prompt, Completion, 缓存命中, Total
+  var modelBody = document.getElementById('modelStatsBody');
+  var modelEntries = Object.entries(stats.models || {});
+  if (modelEntries.length === 0) {
+    modelBody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-secondary);padding:20px">\u6682\u65E0\u6570\u636E</td></tr>';
+  } else {
+    modelEntries.sort(function(a, b) { return b[1].totalTokens - a[1].totalTokens; });
+    modelBody.innerHTML = modelEntries.map(function(e) {
+      var model = e[0], data = e[1];
+      var cacheStr = data.cacheHitTokens ? formatNumber(data.cacheHitTokens) : '-';
+      return '<tr>'
+        + '<td><code>' + esc(model) + '</code></td>'
+        + '<td class="num">' + formatNumber(data.requests) + '</td>'
+        + '<td class="num">' + formatNumber(data.promptTokens) + '</td>'
+        + '<td class="num">' + formatNumber(data.completionTokens) + '</td>'
+        + '<td class="num" style="color:var(--warning)">' + cacheStr + '</td>'
+        + '<td class="num"><strong>' + formatNumber(data.totalTokens) + '</strong></td>'
+        + '</tr>';
+    }).join('');
+  }
+
+  // 每日明细 — cols: 日期, 请求数, Prompt, Completion, 缓存命中, Total, 趋势
+  var dailyBody = document.getElementById('dailyStatsBody');
+  var dailyData = stats.daily || [];
+  if (dailyData.length === 0) {
+    dailyBody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-secondary);padding:20px">\u6682\u65E0\u6570\u636E</td></tr>';
+  } else {
+    var maxDaily = dailyData.slice(0, 30);
+    var maxTotal = Math.max.apply(null, maxDaily.map(function(d) { return d.totalTokens; }).concat([1]));
+    dailyBody.innerHTML = maxDaily.map(function(day) {
+      var pct = ((day.totalTokens / maxTotal) * 100).toFixed(1);
+      var barWidth = Math.max(2, pct);
+      var cacheStr = day.cacheHitTokens ? formatNumber(day.cacheHitTokens) : '-';
+      return '<tr>'
+        + '<td>' + esc(day.date) + '</td>'
+        + '<td class="num">' + formatNumber(day.requests) + '</td>'
+        + '<td class="num">' + formatNumber(day.promptTokens) + '</td>'
+        + '<td class="num">' + formatNumber(day.completionTokens) + '</td>'
+        + '<td class="num" style="color:var(--warning)">' + cacheStr + '</td>'
+        + '<td class="num"><strong>' + formatNumber(day.totalTokens) + '</strong></td>'
+        + '<td class="bar-cell"><div style="display:flex;align-items:center;gap:8px"><div style="flex:1;height:16px;background:var(--border);border-radius:8px;overflow:hidden"><div style="height:100%;width:' + barWidth + '%;background:var(--success);border-radius:8px;transition:width .3s"></div></div><span style="font-size:11px;color:var(--text-secondary);min-width:36px">' + pct + '%</span></div></td>'
+        + '</tr>';
+    }).join('');
+  }
+
+  // 最近请求 — cols: 时间, 模型, 目标模型, Prompt, Completion, 缓存, Total, 来源
+  var recentBody = document.getElementById('recentStatsBody');
+  var recentData = stats.recentRecords || [];
+  if (recentData.length === 0) {
+    recentBody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-secondary);padding:20px">\u6682\u65E0\u6570\u636E</td></tr>';
+  } else {
+    recentBody.innerHTML = recentData.map(function(r) {
+      var cacheStr = r.cacheHitTokens ? formatNumber(r.cacheHitTokens) : '-';
+      return '<tr>'
+        + '<td style="white-space:nowrap">' + (r.timestamp ? r.timestamp.substring(11, 19) : '-') + '</td>'
+        + '<td><code>' + esc(r.model || '-') + '</code></td>'
+        + '<td><code>' + esc(r.targetModel || '-') + '</code></td>'
+        + '<td class="num">' + formatNumber(r.promptTokens) + '</td>'
+        + '<td class="num">' + formatNumber(r.completionTokens) + '</td>'
+        + '<td class="num" style="color:var(--warning)">' + cacheStr + '</td>'
+        + '<td class="num"><strong>' + formatNumber(r.totalTokens) + '</strong></td>'
+        + '<td style="font-size:11px;color:var(--text-secondary)">' + esc(r.host || '-') + '</td>'
+        + '</tr>';
+    }).join('');
+  }
+}
 
 // 加载配置
 loadConfig();
